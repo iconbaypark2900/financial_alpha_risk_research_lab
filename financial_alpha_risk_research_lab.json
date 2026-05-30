@@ -1,0 +1,55 @@
+{
+    "services": [
+    {
+        "name": "strategy_evolution_service",
+        "responsibilities": [
+            "Search strategy and hyperparameter spaces using Optuna and OpenEvolve",
+            "Score candidates on multi-objective criteria",
+            "Promote robust strategies to deployment lists"
+        ]
+    },
+    {
+        "name": "market_data_pipeline",
+        "responsibilities": [
+            "Fetch raw market data from sources",
+            "Normalize and adjust data",
+            "Write to timeseries store",
+            "Emit price update events"
+        ]
+    },
+    {
+        "name": "factor_update_pipeline",
+        "responsibilities": [
+            "Load prices from timeseries store",
+            "Compute factors",
+            "Store factors",
+            "Notify downstream services"
+        ]
+    },    {
+        "name": "backtest_pipeline",
+        "responsibilities": [
+            "Load configuration",
+            "Load data and factors",
+            "Run backtest",
+            "Compute metrics",
+            "Persist results"
+        ]
+    },    {
+        "name": "strategy_evolution_pipeline",
+        "responsibilities": [
+            "Sample candidate strategy",
+            "Run backtest",
+            "Evaluate multi-objective metrics",
+            "Log candidate",
+            "Update Pareto front"
+        ]
+    },    {
+        "name": "research_rag_pipeline",
+        "responsibilities": [
+            "Index filings, transcripts, and research documents",
+            "Provide hybrid BM25 + vector + graph retrieval",
+            "Support natural language queries for explanations and context"
+        ]
+    }
+    ]
+}

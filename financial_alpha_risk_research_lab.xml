@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+</Service>
+<Service name="portfolio_risk_service">
+<Responsibility>Perform portfolio optimization under constraints</Responsibility>
+<Responsibility>Compute risk metrics and stress scenarios</Responsibility>
+</Service>
+<Service name="strategy_evolution_service">
+<Responsibility>Search strategy spaces using HPO and evolutionary methods</Responsibility>
+<Responsibility>Rank candidates on multi-objective metrics</Responsibility>
+</Service>
+<Service name="research_rag_service">
+<Responsibility>Index research documents and filings</Responsibility>
+<Responsibility>Serve hybrid retrieval for explanation and context</Responsibility>
+</Service>
+</Services>
+
+
+<Workflows>
+<Workflow id="market_data_pipeline">
+<Trigger>cron</Trigger>
+<Trigger>event</Trigger>
+<Step>fetch_raw_data</Step>
+<Step>normalize_adjust</Step>
+<Step>write_timeseries_store</Step>
+<Step>emit_prices_updated</Step>
+</Workflow>
+<Workflow id="factor_update_pipeline">
+<Trigger>cron</Trigger>
+<Trigger>event</Trigger>
+<Step>load_prices</Step>
+<Step>compute_factors</Step>
+<Step>store_factors</Step>
+<Step>notify_downstream</Step>
+</Workflow>
+<Workflow id="backtest_pipeline">
+<Trigger>api_call</Trigger>
+<Step>load_config</Step>
+<Step>load_data_and_factors</Step>
+<Step>run_backtest</Step>
+<Step>compute_metrics</Step>
+<Step>persist_results</Step>
+</Workflow>
+<Workflow id="strategy_evolution_pipeline">
+<Trigger>manual</Trigger>
+<Trigger>cron</Trigger>
+<Step>sample_candidate_strategy</Step>
+<Step>run_backtest</Step>
+<Step>evaluate_multi_objective_metrics</Step>
+<Step>log_candidate</Step>
+<Step>update_pareto_front</Step>
+</Workflow>
+</Workflows>
+
+
+<Security>
+<Auth>oidc_sso</Auth>
+<PolicyEngine>opa</PolicyEngine>
+<SecretManagement>vault</SecretManagement>
+<NetworkIsolation>vpc_and_firewall_segmentation</NetworkIsolation>
+</Security>
+
+
+<NonFunctional>
+<Reproducibility>true</Reproducibility>
+<Scalability>single_node_to_cluster</Scalability>
+<Auditability>true</Auditability>
+<LatencyProfile>research_batch_plus_interactive_apis</LatencyProfile>
+</NonFunctional>
+</Project>
