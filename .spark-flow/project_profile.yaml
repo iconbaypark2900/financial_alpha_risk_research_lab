@@ -1,0 +1,36 @@
+project:
+  name: financial_alpha_risk_research_lab
+  machine: dgx_spark
+  local_path: /home/iconbaypark2900/dataScience/financial_alpha_risk_research_lab
+  origin: git@github.com:iconbaypark2900/financial_alpha_risk_research_lab.git
+  branch: main
+  category: data_science
+  portfolio_status: active
+  maturity_phase: alpha
+  task_phase: intake
+runtime:
+  gpu_required: false
+  runtime_type: python
+  stack: [python]
+validation:
+  commands:
+    - "cd ~/dataScience/financial_alpha_risk_research_lab && .venv/bin/python -m pytest tests/ -q"
+    - "cd ~/dataScience/financial_alpha_risk_research_lab && PYTHONPATH=migration_inbox/finGuard/src .venv/bin/python -m pytest migration_inbox/finGuard/tests/ -q"
+risks:
+  - financial
+  - paper-trading-boundaries
+  - no-live-api-keys-in-git
+next_actions:
+  - "L5 flywheel pilot complete (flywheel-finguard-001 closed 2026-05-31, workload_id: finguard-backtest-v1)"
+  - "Open flywheel-finguard-002 on next migration_inbox/finGuard module merge (workload_id: finguard-backtest-v2)"
+  - "Open financial-alpha-beta-gate-001 to formally assess Beta readiness (SLO, rollback, data policy)"
+  - "Remove pytest.ini --ignore exemption for test_market_data_pipeline.py once pipeline deps available"
+flywheel:
+  cadence: per-merge
+  workload_id_prefix: finguard-backtest
+  last_pilot: flywheel-finguard-001
+  pilot_date: "2026-05-31"
+  validation_profile: data-flywheel
+liaison:
+  recommended_agents: [hermes, codex]
+  patterns: [python-cli]

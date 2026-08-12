@@ -1,107 +1,51 @@
-# Financial Alpha & Risk Research Lab
+# Financial Alpha & Risk Research Lab *(internal tool)*
 
-A comprehensive quantitative finance research platform designed for developing, testing, and optimizing trading strategies with advanced risk management.
+A quantitative research platform whose primary design goal is **not** finding
+strategies — it is making the strategies it finds *believable*. The specification
+is [`prd_04_financial_alpha_research_lab.md`](../../prd_04_financial_alpha_research_lab.md).
 
-## Overview
+## Why this is built the way it is
 
-The Financial Alpha & Risk Research Lab is a sophisticated platform that combines machine learning, quantitative finance, and natural language processing to enable systematic investment strategy research. It includes:
+From PRD 04 §0, on what will actually kill this project:
 
-- **Market Data Pipeline**: Ingests and processes market data from various sources
-- **Factor Update Pipeline**: Computes and manages quantitative factors
-- **Backtest Pipeline**: Executes comprehensive backtesting with realistic assumptions
-- **Strategy Evolution Pipeline**: Automates strategy discovery and optimization
-- **Research RAG Pipeline**: Provides AI-powered research assistance with document retrieval
-- **Portfolio Risk Service**: Performs portfolio optimization and risk analysis
+> Run a large number of trials against historical data and keep the ones that
+> scored best. That procedure reliably manufactures strategies with excellent
+> backtests and zero forward performance. With enough trials, a Sharpe ratio
+> above 2 on in-sample data is achievable on pure noise, and the expected
+> out-of-sample Sharpe of the selected strategy is approximately zero. **The more
+> thoroughly you search, the more confidently wrong you become.**
 
-## Architecture
+Every component below exists to make that failure visible rather than invisible.
+This is why the research-integrity module is built first, before any search
+capability: the controls must exist before the thing they constrain.
 
-### Tech Stack
-- **Storage**: OpenSearch for logs and document indexing, Qdrant for vector embeddings, Neo4j for knowledge graphs
-- **ML/Quant**: PyTorch, vectorbt/Backtrader, PyPortfolioOpt, River for online learning
-- **Optimization**: Optuna and OpenEvolve for hyperparameter and strategy optimization
-- **Security**: HashiCorp Vault for secrets management, Open Policy Agent for access control
-- **Observability**: MLflow, Langfuse, Prometheus + Grafana
+## V0 scope — Trustworthy Backtests
 
-### Core Services
+| Component | Status |
+|---|---|
+| **Research integrity** — trial counter, deflated Sharpe, protected holdout, pre-registration | in progress |
+| Point-in-time data store — Iceberg over Parquet, DuckDB query engine | not started |
+| Factor library — small, each factor unit-tested against known values | not started |
+| Backtest engine — NautilusTrader, with costs, borrow, partial fills, impact | not started |
+| Minimal trial-search harness — enough to demonstrate the null-result benchmark | not started |
+| Capacity analysis in the primary result | not started |
+| Run reproducibility — data version, code SHA, parameters, environment | not started |
+| Experiment log — MLflow | not started |
 
-#### Market Data Pipeline
-- Connects to multiple data sources (broker APIs, crypto exchanges, macro data, SEC filings)
-- Normalizes, adjusts for corporate actions, and handles missing data
-- Maintains timeseries data store and emits price update events
+## Deliberately out of scope
 
-#### Factor Update Pipeline
-- Computes technical factors (momentum, volatility, trend, spreads)
-- Calculates cross-sectional factors (value, quality, growth, size, profitability)
-- Implements event/flow-based features (earnings, insider trades, buybacks)
-- Extensible architecture for custom factor definitions
+- **Neo4j / knowledge graph.** PRD 04 NG3: *"Not a graph database application.
+  Neo4j struck."* Factor research, backtesting and portfolio optimization are
+  tabular time-series problems throughout.
+- **Multi-tenancy, OPA, Vault, RBAC.** This is an internal tool run by the team
+  that trades the strategies; those controls purchase against a threat model that
+  does not exist.
+- **Portfolio construction and risk analytics** — V1 (§5.5). Prior work staged in
+  `migration_inbox/finGuard/` is the input to that phase, not to V0.
 
-#### Backtest Pipeline
-- Supports daily and intraday granularities
-- Includes realistic transaction cost models, borrow fees, partial fills
-- Implements various portfolio types (long-only, long-short, market-neutral)
-- Generates comprehensive performance and risk metrics
+## History
 
-#### Strategy Evolution Pipeline
-- Uses Bayesian optimization (Optuna) and evolutionary algorithms (OpenEvolve)
-- Optimizes for risk-adjusted returns, tail risk measures, and robustness
-- Maintains Pareto-optimal front of strategies across multiple objectives
-
-#### Research RAG Pipeline
-- Hybrid retrieval combining BM25, vector embeddings, and graph traversal
-- Processes filings, transcripts, research reports, and internal notes
-- Enables natural language queries for insights and explanations
-
-#### Portfolio Risk Service
-- Implements mean-variance, risk parity, and minimum volatility optimization
-- Computes VaR, CVaR, and other risk metrics
-- Performs stress testing and scenario analysis
-
-## Setup
-
-1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set up required services (OpenSearch, Qdrant, Neo4j, Vault)
-4. Configure settings in `config/settings.json`
-5. Run individual services as needed
-
-## Usage
-
-Each service can be run independently or as part of the integrated pipeline:
-
-```bash
-# Run market data pipeline
-cd src/market_data_pipeline && python main.py
-
-# Run factor update pipeline
-cd src/factor_update_pipeline && python main.py
-
-# Run backtest pipeline
-cd src/backtest_pipeline && python main.py
-
-# Run strategy evolution pipeline
-cd src/strategy_evolution_pipeline && python main.py
-
-# Run research RAG pipeline
-cd src/research_rag_pipeline && python main.py
-
-# Run portfolio risk service
-cd src/portfolio_risk_service && python main.py
-```
-
-## Security & Governance
-
-- Role-based access control enforced via Open Policy Agent
-- Full audit logging for reproducibility and compliance
-- Secrets management through HashiCorp Vault
-- Network isolation options for sensitive deployments
-
-## Non-Functional Requirements
-
-- Reproducible research runs with full versioning
-- Scales from single-node lab to distributed cluster
-- Batch and near-real-time processing capabilities
-- Extensible architecture for new asset classes and data vendors
-
-## Contributing
-
-See the project documentation for details on how to contribute to the Financial Alpha & Risk Research Lab.
+The previous contents of this repository were template scaffolding inherited
+from a shared project generator, not a considered implementation. It was removed
+in favour of a build against the revised PRD. The prior state is recoverable at
+the tag `template-before-v0-rebuild`.

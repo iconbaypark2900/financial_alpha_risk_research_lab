@@ -1,0 +1,38 @@
+version: 1
+tasks:
+  - id: recommended
+    label: "Stabilize the deterministic baseline"
+    kind: recommended
+    score: 18
+    agents: ["codex", "testing-hardening", "spark-flow-review"]
+    why: "Keeps the project shippable before adding retrieval or UI complexity."
+  - id: near-cleanup
+    label: "Resolve dirty working tree context"
+    kind: near
+    score: 14
+    agents: ["codex", "spark-flow-closeout"]
+    why: "Uncommitted state is evidence that the next agent needs a clear checkpoint before larger changes."
+  - id: near-1
+    label: "Improve project memory and task context"
+    kind: near
+    score: 13
+    agents: ["codex", "spark-flow-planning"]
+    why: "Makes future agent recommendations evidence-based instead of chat-history based."
+  - id: near-2
+    label: "Add retrieval quality checks"
+    kind: near
+    score: 12
+    agents: ["codex", "synthetic-data-designer", "testing-hardening"]
+    why: "Turns search behavior into a measurable contract before changing retrieval strategy."
+  - id: near-3
+    label: "Package the CLI workflow"
+    kind: near
+    score: 10
+    agents: ["codex", "testing-hardening"]
+    why: "Makes the project easier to run and verify from a clean checkout."
+  - id: expansive
+    label: "Prototype semantic retrieval behind the baseline"
+    kind: expansive
+    score: 8
+    agents: ["codex", "synthetic-data-designer", "data_flywheel"]
+    why: "Adds a richer direction while staying tethered to the deterministic index and quality checks."
