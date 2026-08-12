@@ -1,135 +1,175 @@
-import pytest
+"""Tests for the research-integrity core.
+
+The most important tests here are the ORACLE tests: the two source papers each
+publish a worked example with a stated answer, and those answers are pinned
+below. Everything else in this file is an invariant, and invariants were not
+enough — the previous implementation used formulas the papers do not contain,
+and passed every invariant test while doing so. A wrong constant in a
+right-shaped formula stays in [0, 1], stays monotonic, and still discriminates.
+
+Mutation testing made the gap concrete: changing `2` to `3` inside the old
+benchmark-Sharpe formula was invisible to 23 invariant checks. The fixed values
+below are what closes it.
+"""
 import math
-import json
-from src.research_integrity.core import (
-    deflated_sharpe_ratio,
-    minimum_backtest_length,
-    evaluate
+
+import pytest
+
+import src.research_integrity.core as ri
+
+PERIODS_PER_YEAR = 250
+
+# The DSR paper's worked example (p.10): a strategist reports an annualised
+# Sharpe of 2.5 over 5 daily years, after N=100 trials with V[SR]=1/2 annualised
+# and returns with skew -3, kurtosis 10.
+PAPER_DSR = dict(
+    observed_sharpe=2.5 / math.sqrt(PERIODS_PER_YEAR),
+    n_trials=100,
+    sample_length=1250,
+    skewness=-3.0,
+    kurtosis=10.0,
+    var_trials=0.5 / PERIODS_PER_YEAR,
 )
 
-# --- Test Data ---
+# A per-period base case for the invariant tests. Per-period, matching
+# sample_length — an annualised figure here is the units bug this module exists
+# to prevent, and the function now rejects it.
+BASE = dict(observed_sharpe=0.09, n_trials=10, sample_length=1000,
+            skewness=-0.3, kurtosis=4.0, var_trials=0.01)
 
-NORMAL_PARAMS = {
-    "observed_sharpe": 1.5,
-    "n_trials": 10,
-    "sample_length": 500,
-    "skewness": 0.0,
-    "kurtosis": 3.0
-}
 
-# --- R1: deflated_sharpe_ratio Tests ---
+# --- oracle: values published in the papers ---------------------------------
 
-def test_dsr_normal_case():
-    # With normal distribution, skew=0, kurtosis=3
-    # sigma_sr = sqrt(1/500 * (1 + 0 + 0 + 0)) = sqrt(1/500)
-    # sr_benchmark = sqrt(2 * ln(10) / 500) = sqrt(2 * 2.3025 / 500) = sqrt(4.605 / 500) = sqrt(0.00921) = 0.09597
-    # sigma_sr = 1 / sqrt(500) = 1 / 22.36 = 0.04472
-    # z = (1.5 - 0.09597) / 0.04472 = 1.40403 / 0.04472 = 31.39
-    # Phi(31.39) should be ~1.0
-    dsr = deflated_sharpe_ratio(**NORMAL_PARAMS)
-    assert 0.0 <= dsr <= 1.0
-    assert dsr > 0.99
+def test_reproduces_the_papers_rejection_threshold():
+    """SR_0 = 0.1132, printed in the DSR paper's worked example."""
+    sr0 = ri.expected_max_sharpe(100, var_trials=0.5 / PERIODS_PER_YEAR)
+    assert sr0 == pytest.approx(0.1132, abs=5e-5)
 
-def test_dsr_n_trials_1():
-    # n_trials = 1 should be accepted and sr_benchmark = 0
-    params = NORMAL_PARAMS.copy()
-    params["n_trials"] = 1
-    dsr = deflated_sharpe_ratio(**params)
-    assert 0.0 <= dsr <= 1.0
-    # With SR=1.5 and benchmark=0, DSR should be high
-    assert dsr > 0.5
 
-def test_dsr_negative_sharpe():
-    params = NORMAL_PARAMS.copy()
-    params["observed_sharpe"] = -1.0
-    dsr = deflated_sharpe_ratio(**params)
-    assert 0.0 <= dsr <= 1.0
-    assert dsr < 0.5
+def test_reproduces_the_papers_deflated_sharpe():
+    """DSR = 0.9004, printed in the DSR paper's worked example."""
+    assert ri.deflated_sharpe_ratio(**PAPER_DSR) == pytest.approx(0.9004, abs=5e-5)
 
-def test_dsr_edge_cases_raises():
-    # n_trials <= 0
-    with pytest.raises(ValueError, match="n_trials must be greater than 0"):
-        deflated_sharpe_ratio(1.5, 0, 500, 0, 3)
-    
-    # sample_length <= 1
-    with pytest.raises(ValueError, match="sample_length must be greater than 1"):
-        deflated_sharpe_ratio(1.5, 10, 1, 0, 3)
 
-    # Non-finite inputs
-    with pytest.raises(ValueError, match="must be a finite number"):
-        deflated_sharpe_ratio(float('nan'), 10, 500, 0, 3)
-    with pytest.raises(ValueError, match="must be a finite number"):
-        deflated_sharpe_ratio(1.5, 10, float('inf'), 0, 3)
+def test_reproduces_the_papers_investment_decision():
+    """The example exists to show the investor DECLINING at 95% confidence.
 
-    # Invalid types
-    with pytest.raises(TypeError, match="must be a numeric type"):
-        deflated_sharpe_ratio("1.5", 10, 500, 0, 3)
-    with pytest.raises(TypeError, match="must be a numeric type"):
-        deflated_sharpe_ratio(1.5, None, 500, 0, 3)
+    Getting the number right but the verdict wrong would defeat the purpose.
+    The previous implementation returned 0.9960 here, which would have said
+    'accept' — the exact opposite of the paper's conclusion.
+    """
+    out = ri.evaluate(**PAPER_DSR)
+    assert out["deflated_sharpe"] < 0.95
+    assert out["significant"] is False
 
-# --- R2: minimum_backtest_length Tests ---
 
-def test_min_length_normal_case():
-    # T_min = ((sqrt(2 * ln(10)) + 1.645) / 1.5)^2
-    # = ((sqrt(4.605) + 1.645) / 1.5)^2
-    # = ((2.146 + 1.645) / 1.5)^2 = (3.791 / 1.5)^2 = (2.527)^2 = 6.38
-    t_min = minimum_backtest_length(1.5, 10)
-    assert t_min > 0
-    assert math.isclose(t_min, 6.38, rel_tol=1e-2)
+def test_reproduces_the_minbtl_papers_headline_result():
+    """'If only 5 years of data are available, no more than 45 independent
+    model configurations should be tried' — MinBTL paper, Theorem 3.1."""
+    assert ri.minimum_backtest_length(1.0, 45) == pytest.approx(5.0, abs=0.01)
 
-def test_min_length_raises():
-    # n_trials <= 0
-    with pytest.raises(ValueError, match="n_trials must be greater than 0"):
-        minimum_backtest_length(1.5, 0)
-    
-    # observed_sharpe <= 0
-    with pytest.raises(ValueError, match="observed_sharpe must be positive"):
-        minimum_backtest_length(0, 10)
-    with pytest.raises(ValueError, match="observed_sharpe must be positive"):
-        minimum_backtest_length(-1.0, 10)
 
-# --- R3: evaluate Tests ---
+def test_minbtl_stays_below_the_papers_stated_upper_bound():
+    """Theorem 3.1 states MinBTL < 2 ln[N] / SR^2. The bound is loose, and
+    returning the bound instead of the formula was one of the original bugs."""
+    for n in (10, 45, 100, 1000):
+        assert ri.minimum_backtest_length(1.0, n) < 2 * math.log(n)
 
-def test_evaluate_verdict():
-    # Case: sample is too short
-    # T_min is ~6.38, so sample_length 5 should be too short
-    res = evaluate(observed_sharpe=1.5, n_trials=10, sample_length=5, skewness=0, kurtosis=3)
-    assert res["sample_too_short"] is True
-    assert res["sample_length"] == 5
-    assert "deflated_sharpe" in res
-    assert "min_backtest_length" in res
 
-    # Case: sample is long enough
-    res = evaluate(observed_sharpe=1.5, n_trials=10, sample_length=10, skewness=0, kurtosis=3)
-    assert res["sample_too_short"] is False
+def test_expected_max_sharpe_grows_with_trials():
+    """'After only 1,000 independent backtests, the expected maximum Sharpe
+    Ratio is 3.26, even if the true SR is zero.'"""
+    assert ri.expected_max_sharpe(1000, var_trials=1.0) == pytest.approx(3.26, abs=0.01)
 
-# --- Properties P1-P5 Tests ---
+
+# --- invariants (necessary, and demonstrably not sufficient) ----------------
 
 def test_p1_monotonic_in_trials():
-    # Increasing n_trials MUST NOT increase DSR
-    dsr_low = deflated_sharpe_ratio(1.5, 10, 500, 0, 3)
-    dsr_high = deflated_sharpe_ratio(1.5, 100, 500, 0, 3)
-    assert dsr_high <= dsr_low
+    assert ri.deflated_sharpe_ratio(**{**BASE, "n_trials": 1000}) <= \
+           ri.deflated_sharpe_ratio(**{**BASE, "n_trials": 10}) + 1e-12
+
 
 def test_p2_monotonic_in_observed_sharpe():
-    # Increasing observed Sharpe MUST NOT decrease DSR
-    dsr_low = deflated_sharpe_ratio(1.0, 10, 500, 0, 3)
-    dsr_high = deflated_sharpe_ratio(2.0, 10, 500, 0, 3)
-    assert dsr_high >= dsr_low
+    assert ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": 0.2}) >= \
+           ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": 0.09}) - 1e-12
+
 
 def test_p3_bounded():
-    # DSR in [0, 1]
-    assert 0.0 <= deflated_sharpe_ratio(1.5, 10, 500, 0, 3) <= 1.0
-    assert 0.0 <= deflated_sharpe_ratio(-1.5, 10, 500, 0, 3) <= 1.0
+    for s in (-0.2, 0.0, 0.09, 0.3):
+        for n in (1, 10, 5000):
+            v = ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": s, "n_trials": n})
+            assert 0.0 <= v <= 1.0
 
-def test_p4_trials_raise_the_bar():
-    # Increasing n_trials MUST NOT decrease min_backtest_length
-    t_min_low = minimum_backtest_length(1.5, 10)
-    t_min_high = minimum_backtest_length(1.5, 100)
-    assert t_min_high >= t_min_low
+
+def test_p4_minbtl_monotonic_in_trials():
+    assert ri.minimum_backtest_length(0.09, 1000) >= ri.minimum_backtest_length(0.09, 10)
+
 
 def test_p5_deterministic():
-    # Identical inputs produce identical outputs
-    params = (1.5, 10, 500, 0.1, 3.5)
-    assert deflated_sharpe_ratio(*params) == deflated_sharpe_ratio(*params)
-    assert minimum_backtest_length(1.5, 10) == minimum_backtest_length(1.5, 10)
+    a = ri.deflated_sharpe_ratio(**BASE)
+    assert a == ri.deflated_sharpe_ratio(**BASE) == ri.deflated_sharpe_ratio(**BASE)
+
+
+def test_single_trial_carries_no_selection_burden():
+    """N=1 is outside the paper's N >> 1 regime; the module's convention is that
+    one trial means nothing to correct for."""
+    assert ri.expected_max_sharpe(1, var_trials=0.5) == 0.0
+    assert 0.0 <= ri.deflated_sharpe_ratio(**{**BASE, "n_trials": 1}) <= 1.0
+
+
+# --- units: the defect the spec and its gate once shared --------------------
+
+def test_annualised_sharpe_is_rejected_not_silently_answered():
+    with pytest.raises(ValueError, match="PER-PERIOD"):
+        ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": 1.5})
+
+
+def test_variance_of_trials_is_required():
+    """SR_0 cannot be computed without V[{SR_n}]. Defaulting it would invent an
+    answer, which is exactly what the previous version did."""
+    with pytest.raises(TypeError):
+        ri.deflated_sharpe_ratio(0.09, 10, 1000, -0.3, 4.0)
+
+
+# --- edges ------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [
+    {"n_trials": 0}, {"n_trials": -5}, {"sample_length": 1},
+    {"var_trials": -1.0}, {"observed_sharpe": float("nan")},
+    {"observed_sharpe": float("inf")},
+])
+def test_invalid_input_raises(bad):
+    with pytest.raises(ValueError):
+        ri.deflated_sharpe_ratio(**{**BASE, **bad})
+
+
+def test_non_numeric_input_raises():
+    with pytest.raises(TypeError):
+        ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": "1.5"})
+
+
+def test_inconsistent_moments_raise_rather_than_return_nan():
+    """If 1 - g3*SR + (g4-1)/4*SR^2 goes non-positive the statistic is
+    undefined. Refusing is a feature; returning nan is not."""
+    with pytest.raises(ValueError):
+        ri.deflated_sharpe_ratio(**{**BASE, "observed_sharpe": 0.9,
+                                    "skewness": 1.0, "kurtosis": -50.0})
+
+
+# --- the normal helpers, whose failure once propagated everywhere -----------
+
+def test_ppf_sign_and_magnitude():
+    """The -32.81 regression: sign inverted, magnitude wrong by ~20x."""
+    assert ri.NormalDistribution.ppf(0.95) == pytest.approx(1.6448536, abs=1e-6)
+    assert ri.NormalDistribution.ppf(0.5) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_ppf_rejects_its_domain_boundary():
+    for p in (0.0, 1.0, -0.1, 1.5):
+        with pytest.raises(ValueError):
+            ri.NormalDistribution.ppf(p)
+
+
+def test_cdf_ppf_round_trip():
+    for p in (0.05, 0.5, 0.95, 0.999):
+        assert ri.NormalDistribution.cdf(ri.NormalDistribution.ppf(p)) == pytest.approx(p)
