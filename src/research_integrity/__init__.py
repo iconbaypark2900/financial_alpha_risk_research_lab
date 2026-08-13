@@ -5,6 +5,7 @@ papers' worked examples. See core.py for the provenance note — the first
 version invented approximations the papers do not contain, and every invariant
 test passed while it did.
 """
+from .trial_counter import TrialCounter, TrialCounterError
 from .core import (
     EULER_MASCHERONI,
     NormalDistribution,
@@ -15,6 +16,8 @@ from .core import (
 )
 
 __all__ = [
+    "TrialCounter",
+    "TrialCounterError",
     "EULER_MASCHERONI",
     "NormalDistribution",
     "deflated_sharpe_ratio",

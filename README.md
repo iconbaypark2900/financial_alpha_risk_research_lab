@@ -49,3 +49,37 @@ The previous contents of this repository were template scaffolding inherited
 from a shared project generator, not a considered implementation. It was removed
 in favour of a build against the revised PRD. The prior state is recoverable at
 the tag `template-before-v0-rebuild`.
+
+## Global trial counter (FR-08, FR-15)
+
+`TrialCounter` records every backtest run against every dataset, and supplies
+the two inputs the deflated Sharpe needs but nothing previously recorded: the
+trial count and the variance of Sharpe estimates across trials.
+
+```python
+from src.research_integrity import TrialCounter, deflated_sharpe_ratio
+
+counter = TrialCounter("research.db")
+trial = counter.start_trial("sp500", strategy="momentum", params={"lookback": 20})
+counter.record_outcome(trial, sharpe=0.12, n_observations=1250)
+
+inputs = counter.deflation_inputs("sp500")     # {"n_trials": ..., "var_trials": ...}
+```
+
+The effect, on one unchanged result as the search around it grows:
+
+| trials run | deflated Sharpe | verdict at 95% |
+|---:|---:|---|
+| 10 | 0.9998 | significant |
+| 100 | 0.9657 | significant |
+| 1,000 | 0.8814 | **not** significant |
+| 5,000 | 0.7820 | **not** significant |
+
+Same observed Sharpe of 0.12 over 1,250 observations throughout. Searching
+harder makes it less impressive, without anyone having to choose to be honest.
+
+**Why it is append-only.** FR-08 requires counting "runs whose results were
+discarded", so trials are recorded when they START, before the result exists,
+and the SQLite schema refuses deletes and outcome rewrites by trigger — not by
+convention. A researcher who can delete rows can manufacture any deflated Sharpe
+they want, and "please don't" is not a control.
