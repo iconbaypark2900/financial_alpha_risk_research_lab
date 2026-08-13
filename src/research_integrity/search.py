@@ -41,8 +41,30 @@ from .core import deflated_sharpe_ratio, minimum_backtest_length
 from .trial_counter import TrialCounter
 
 
-def moving_average_crossover(returns: np.ndarray, fast: int, slow: int) -> float:
+def moving_average_crossover(returns: np.ndarray, fast: int, slow: int,
+                             mode: str = "excess") -> float:
     """A deliberately ordinary strategy family: long when fast MA > slow MA.
+
+    THE DRIFT TRAP, found by running this against real SPY data
+
+    `mode="long_only"` scores the raw strategy return, and on any asset with
+    positive drift that is a trap. Reshuffling preserves the MEAN exactly, so a
+    long-only rule keeps earning the equity risk premium even when every
+    temporal relationship has been destroyed. Measured on SPY 2010-2024: all
+    7,866 trials were positive on both the real and the shuffled series, the
+    variance across trials was ~2.7e-5, and the deflated Sharpe therefore came
+    out at 0.99 on data with provably no signal in it.
+
+    The deflated Sharpe was not wrong; it was answering a different question.
+    It asks "is this the best of N draws?", not "does this beat holding the
+    asset?" Nothing about selection bias can notice that every candidate is
+    riding the same risk premium.
+
+    So the default is `mode="excess"`: the strategy's return MINUS buy-and-hold,
+    which is the comparison a researcher actually cares about. On SPY the best
+    of 7,866 variants scores -0.0194 that way — the best one LOSES to simply
+    holding the asset, which is the honest finding and is invisible in
+    long-only terms.
 
     Chosen because it is the kind of rule that fills the practitioner
     literature, and because with two integer parameters it generates thousands
@@ -70,7 +92,8 @@ def moving_average_crossover(returns: np.ndarray, fast: int, slow: int) -> float
     assert fast_ma.shape == slow_ma.shape
 
     # Signal formed at bar t is traded at t+1: no peeking at the bar you act on.
-    signal = np.where(fast_ma > slow_ma, 1.0, 0.0)[:-1]
+    flat = -1.0 if mode == "long_short" else 0.0
+    signal = np.where(fast_ma > slow_ma, 1.0, flat)[:-1]
     realised = returns[slow:]
     n = min(signal.size, realised.size)
     signal, realised = signal[:n], realised[:n]
@@ -78,6 +101,13 @@ def moving_average_crossover(returns: np.ndarray, fast: int, slow: int) -> float
         return 0.0
 
     strategy_returns = signal * realised
+    if mode == "excess":
+        # Against the passive alternative, which is the only benchmark that
+        # makes a long-only equity rule falsifiable.
+        strategy_returns = strategy_returns - realised
+    elif mode not in ("long_only", "long_short"):
+        raise ValueError(f"unknown mode {mode!r}; expected excess, long_only "
+                         "or long_short")
     sd = strategy_returns.std(ddof=1)
     if sd < 1e-12:
         return 0.0

@@ -236,3 +236,47 @@ def test_failed_trials_still_count(counter):
     assert result["trials_run"] == 2
     assert result["trials_evaluated"] == 1
     assert counter.trial_count("ds") == 2
+
+
+# --- the drift trap, found on real SPY data --------------------------------
+
+def test_long_only_on_a_drifting_asset_scores_well_on_shuffled_data():
+    """The trap, reproduced. Shuffling preserves the MEAN exactly, so a
+    long-only rule keeps earning the drift even with no sequence left.
+
+    Measured on real SPY 2010-2024, all 7,866 trials were positive on BOTH the
+    real and the reshuffled series, and the deflated Sharpe came out at 0.99 on
+    data with provably no signal. This asserts the mechanism on synthetic data
+    with the same property.
+    """
+    rng = np.random.default_rng(11)
+    drifting = 0.0006 + rng.standard_normal(2000) * 0.01   # positive drift
+    shuffled = drifting.copy()
+    rng.shuffle(shuffled)
+
+    best_shuffled = max(moving_average_crossover(shuffled, **p, mode="long_only")
+                        for p in SMALL_GRID)
+    assert best_shuffled > 0, (
+        "a long-only rule on shuffled positive-drift returns should still score "
+        "positively; if it does not, this fixture no longer demonstrates the trap")
+
+
+def test_excess_returns_remove_the_drift_the_shuffle_preserves():
+    """The fix, and the default. Measuring against buy-and-hold makes a
+    long-only equity rule falsifiable, because the passive alternative earns the
+    same drift."""
+    rng = np.random.default_rng(11)
+    drifting = 0.0006 + rng.standard_normal(2000) * 0.01
+    shuffled = drifting.copy()
+    rng.shuffle(shuffled)
+
+    long_only = max(moving_average_crossover(shuffled, **p, mode="long_only")
+                    for p in SMALL_GRID)
+    excess = max(moving_average_crossover(shuffled, **p, mode="excess")
+                 for p in SMALL_GRID)
+    assert excess < long_only
+
+
+def test_an_unknown_mode_is_refused():
+    with pytest.raises(ValueError, match="unknown mode"):
+        moving_average_crossover(noise(500), 5, 20, mode="magic")
