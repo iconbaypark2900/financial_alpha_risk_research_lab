@@ -20,6 +20,12 @@ from .execution_costs import (
     execution_cost,
 )
 from .holdout import HoldoutViolation, ProtectedHoldout
+from .run_record import (
+    ExperimentLog,
+    NotReproducible,
+    UncommittedCode,
+    canonical_hash,
+)
 try:  # duckdb is optional; the rest of the module does not need it
     from .point_in_time import (
         LookAheadContamination,
@@ -47,7 +53,11 @@ from .core import (
 
 __all__ = [
     "BorrowUnavailable",
+    "ExperimentLog",
     "HoldoutViolation",
+    "NotReproducible",
+    "UncommittedCode",
+    "canonical_hash",
     "Instrument",
     "borrow_cost",
     "capacity",

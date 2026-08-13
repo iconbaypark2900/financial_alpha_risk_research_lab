@@ -231,3 +231,33 @@ strategy. There is a test that fails if β is set to 0.5.
 **Borrow is a constraint, not a price** (FR-18): an unborrowable short raises
 rather than costing more. Charging a higher fee for shares that do not exist to
 lend produces a backtest of a strategy nobody could have run.
+
+## Reproducibility (FR-22, FR-23, FR-24, FR-25)
+
+```python
+from src.research_integrity import ExperimentLog
+
+log = ExperimentLog("runs.db", repo=".")
+with log.run("momentum", params={"lookback": 20}, seeds={"numpy": 42},
+             dataset_versions=["fundamentals@v3"], factors=["value"]) as run:
+    run.record(backtest(lookback=20))
+
+log.replay(run_id, backtest)     # re-executes and requires an identical hash
+log.query(strategy="momentum", since="2024-01-01", outcome="completed")
+```
+
+**FR-23 is enforced, not asserted.** `replay()` restores the recorded seeds,
+re-executes, and compares a canonical hash of the output against the one stored
+at the time. A record with every field populated still fails to reproduce if an
+unrecorded seed was consumed — and the whole failure mode is that *the missing
+field is never the one you thought to record*. There is a test that consumes an
+unrecorded random source and requires the replay to catch it.
+
+**FR-24** rejects uncommitted code by default, or records the **full diff** with
+`allow_uncommitted=True`. Dirtiness means uncommitted *code*: modifications to
+tracked files always count, and untracked files count only when they are source.
+Writing the experiment log into the repo would otherwise mark every subsequent
+run as unknown-code and get the control switched off wholesale.
+
+Run records are permanent, and identity, code and parameters are immutable —
+SQLite triggers, as elsewhere in this module.
