@@ -54,3 +54,9 @@ prometheus-client>=0.15.0
 pyjwt>=2.4.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.0
+
+# Research data store. PRD section 6 names DuckDB as the query engine and
+# Iceberg for versioning. DuckDB is used directly over the bitemporal fact
+# table; see src/research_integrity/point_in_time.py for why Iceberg time
+# travel alone does not satisfy FR-01.
+duckdb>=1.0.0

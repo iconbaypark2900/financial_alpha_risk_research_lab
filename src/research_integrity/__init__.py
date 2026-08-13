@@ -12,6 +12,14 @@ from .cross_validation import (
     leakage_report,
 )
 from .holdout import HoldoutViolation, ProtectedHoldout
+try:  # duckdb is optional; the rest of the module does not need it
+    from .point_in_time import (
+        LookAheadContamination,
+        PointInTimeError,
+        PointInTimeStore,
+    )
+except ImportError:  # pragma: no cover
+    PointInTimeStore = None  # type: ignore[assignment]
 from .search import (
     compare_to_null,
     crossover_grid,
@@ -31,6 +39,9 @@ from .core import (
 
 __all__ = [
     "HoldoutViolation",
+    "LookAheadContamination",
+    "PointInTimeError",
+    "PointInTimeStore",
     "LeakageError",
     "PurgedKFold",
     "assert_no_leakage",
