@@ -153,6 +153,16 @@ class TrialCounter:
             raise ValueError(
                 "dataset_id is required: the count is per dataset, and an "
                 "unattributed trial cannot contribute to any dataset's burden")
+        if params is not None and not isinstance(params, dict):
+            # json.dumps happily serialises a list, so a malformed params
+            # argument was accepted silently and stored as something no reader
+            # could interpret as parameters. Found by writing a strict enough
+            # SPEC for someone else to build from — the gate calibration caught
+            # it in code that had already shipped.
+            raise TypeError(
+                f"params must be a dict of parameter names to values, got "
+                f"{type(params).__name__}. A trial whose parameters cannot be "
+                "read back is a trial nobody can reproduce.")
 
         trial_id = str(uuid.uuid4())
         with self._connect() as conn:

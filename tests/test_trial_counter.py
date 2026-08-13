@@ -224,3 +224,20 @@ def test_the_full_record_is_retrievable(counter):
     assert row["dataset_version"] == "v3"
     assert '"lookback": 20' in row["params_json"]
     assert row["started_at"]
+
+
+def test_malformed_params_are_refused(counter):
+    """json.dumps serialises a list without complaint, so this was accepted
+    silently and stored as something no reader could interpret as parameters.
+
+    Found by calibrating a gate written from a stricter SPEC against this
+    implementation — a gap in code that had already shipped, surfaced by
+    specifying the requirement precisely enough for someone else to build it.
+    """
+    with pytest.raises(TypeError, match="params must be a dict"):
+        counter.start_trial("sp500", params=["lookback", 20])
+    with pytest.raises(TypeError, match="params must be a dict"):
+        counter.start_trial("sp500", params="lookback=20")
+    # None and a real dict both remain fine.
+    counter.start_trial("sp500", params=None)
+    counter.start_trial("sp500", params={"lookback": 20})
