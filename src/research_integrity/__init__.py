@@ -5,6 +5,7 @@ papers' worked examples. See core.py for the provenance note — the first
 version invented approximations the papers do not contain, and every invariant
 test passed while it did.
 """
+from .holdout import HoldoutViolation, ProtectedHoldout
 from .trial_counter import TrialCounter, TrialCounterError
 from .core import (
     EULER_MASCHERONI,
@@ -16,6 +17,8 @@ from .core import (
 )
 
 __all__ = [
+    "HoldoutViolation",
+    "ProtectedHoldout",
     "TrialCounter",
     "TrialCounterError",
     "EULER_MASCHERONI",

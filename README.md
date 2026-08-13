@@ -83,3 +83,40 @@ discarded", so trials are recorded when they START, before the result exists,
 and the SQLite schema refuses deletes and outcome rewrites by trigger — not by
 convention. A researcher who can delete rows can manufacture any deflated Sharpe
 they want, and "please don't" is not a control.
+
+## Protected holdout (FR-10, FR-11, FR-12)
+
+A holdout only means anything if looking at it is *hard*. The usual failure is
+not dishonesty but drift: one peek to sanity-check a pipeline, another to
+compare two variants, and by the tenth it is in-sample data everyone still calls
+out-of-sample. No step in that sequence feels wrong at the time, which is why
+this refuses rather than advises.
+
+```python
+from src.research_integrity import ProtectedHoldout
+
+holdout = ProtectedHoldout("research.db")
+holdout.define("sp500", start="2023-01-01", end="2024-12-31")
+
+holdout.assert_ordinary_access("sp500", "2020-01-01", "2023-06-30")
+# HoldoutViolation: requested range overlaps the protected holdout
+
+reg = holdout.preregister("sp500", strategy_family="momentum",
+                          hypothesis="20-day momentum survives out of sample",
+                          expected_result="annualised Sharpe between 0.4 and 0.8")
+verdict = holdout.evaluate(reg, observed={"sharpe_annualised": 0.31})
+```
+
+The exhaustion warning escalates with the number of looks, because the harm
+does:
+
+| looks at the same family | status |
+|---:|---|
+| 1 | no warning |
+| 2–3 | `HOLDOUT EXHAUSTION` — treat the result as optimistic |
+| 4+ | `HOLDOUT EXHAUSTED` — in-sample data; a fresh holdout is required |
+
+The period is immutable once defined, registrations are content-hashed and
+single-use, and evaluations cannot be deleted or edited — all enforced by SQLite
+triggers. A holdout you can move after seeing results is not a holdout, and an
+exhaustion count you can reset is not a count.
