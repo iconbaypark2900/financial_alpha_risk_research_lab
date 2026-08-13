@@ -11,6 +11,14 @@ from .cross_validation import (
     assert_no_leakage,
     leakage_report,
 )
+from .execution_costs import (
+    BorrowUnavailable,
+    Instrument,
+    borrow_cost,
+    capacity,
+    check_borrow,
+    execution_cost,
+)
 from .holdout import HoldoutViolation, ProtectedHoldout
 try:  # duckdb is optional; the rest of the module does not need it
     from .point_in_time import (
@@ -38,7 +46,13 @@ from .core import (
 )
 
 __all__ = [
+    "BorrowUnavailable",
     "HoldoutViolation",
+    "Instrument",
+    "borrow_cost",
+    "capacity",
+    "check_borrow",
+    "execution_cost",
     "LookAheadContamination",
     "PointInTimeError",
     "PointInTimeStore",

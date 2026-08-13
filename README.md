@@ -189,3 +189,45 @@ through adjacency even when the windows do not touch.
 There is no option to disable purging. FR-14 says naive k-fold must not be
 offered, and a flag would be exactly that with an extra step — the leaky path
 would become the one people take when the honest numbers disappoint.
+
+## Execution costs and capacity (FR-17, FR-18, FR-20)
+
+**The engine itself is NautilusTrader** (1.231.0, installed), as the PRD
+specifies. It supplies FR-19 (partial fills, latency) and FR-21 — look-ahead is
+structurally impossible in an event-driven engine, because data arrives as
+timestamped messages rather than being indexable. Reimplementing that by hand
+when the spec names it would repeat the Mitiq mistake made earlier in this
+project.
+
+What NautilusTrader does not supply, and is built here:
+
+```python
+from src.research_integrity import Instrument, capacity, execution_cost
+
+big = Instrument("BIG", price=50.0, adv=10_000_000,
+                 daily_volatility=0.02, shares_outstanding=1_000_000_000)
+execution_cost(100_000, big)["total_bps"]        # 10.3 bps
+capacity(big, gross_sharpe=2.0, turnover_per_year=12).aum_ceiling
+```
+
+| | large cap (10m ADV) | microcap (100k ADV) |
+|---|---:|---:|
+| cost of 100,000 shares | 10.3 bps | 135.2 bps |
+| participation rate | 1.0% | 100% |
+| AUM ceiling @ Sharpe 2.0 | $22,446m | $225m |
+
+### The impact model is the paper's, not the folklore
+
+Almgren, Thum, Hauptmann & Li (2005), equations (7) and (8), coefficients from
+§4.3: **γ = 0.314, η = 0.142, α = 1, β = 3/5, δ = 1/4**.
+
+The widely-quoted "square-root law" is **not** what that paper found. Its
+abstract says: *"We reject the common square-root model for temporary impact as
+function of trade rate, in favor of a 3/5 power law."* Doubling the trade rate
+multiplies temporary impact by 2^0.6 = 1.516, not 2^0.5 = 1.414 — a 7% error,
+exactly the size that survives every sanity check and quietly misprices a
+strategy. There is a test that fails if β is set to 0.5.
+
+**Borrow is a constraint, not a price** (FR-18): an unborrowable short raises
+rather than costing more. Charging a higher fee for shares that do not exist to
+lend produces a backtest of a strategy nobody could have run.

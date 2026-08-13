@@ -6,7 +6,9 @@ yfinance>=0.2.18
 
 # Quantitative Finance Libraries
 vectorbt>=0.20.0
-backtrader>=1.9.77
+# backtrader: STRUCK. PRD section 3 says so explicitly — 'Whatever is
+# chosen, Backtrader should be struck.' It was still pinned here.
+nautilus_trader>=1.231.0
 PyPortfolioOpt>=1.5.0
 cvxpy>=1.2.0
 
