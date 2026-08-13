@@ -5,6 +5,12 @@ papers' worked examples. See core.py for the provenance note — the first
 version invented approximations the papers do not contain, and every invariant
 test passed while it did.
 """
+from .cross_validation import (
+    LeakageError,
+    PurgedKFold,
+    assert_no_leakage,
+    leakage_report,
+)
 from .holdout import HoldoutViolation, ProtectedHoldout
 from .search import (
     compare_to_null,
@@ -25,6 +31,10 @@ from .core import (
 
 __all__ = [
     "HoldoutViolation",
+    "LeakageError",
+    "PurgedKFold",
+    "assert_no_leakage",
+    "leakage_report",
     "compare_to_null",
     "crossover_grid",
     "moving_average_crossover",

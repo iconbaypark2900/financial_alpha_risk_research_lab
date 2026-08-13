@@ -154,3 +154,38 @@ alone would have obscured in both columns.
 The harness registers the entire sweep before evaluating any of it, so a search
 cannot be truncated at the moment it starts looking good and reported as though
 it had always been that size.
+
+## Purged, embargoed cross-validation (FR-14)
+
+A financial label resolves in the future: the observation at time *t* is
+labelled by what happened over *[t, t+h]*. Two observations less than *h* apart
+therefore share outcome information. Standard k-fold ignores that, so training
+rows whose label windows overlap the test window have already seen part of the
+answer — and every fold has the same leak, so repetition never reveals it.
+
+```python
+from src.research_integrity import PurgedKFold, assert_no_leakage
+
+cv = PurgedKFold(n_splits=5, embargo_pct=0.01)
+for train_idx, test_idx in cv.split(label_start, label_end):
+    assert_no_leakage(train_idx, test_idx, label_start, label_end)
+```
+
+What naive k-fold would leak on 1,000 observations across 5 folds:
+
+| label horizon | observations leaked | leak rate |
+|---:|---:|---:|
+| 1 | 8 | 0.16% |
+| 10 | 80 | 1.60% |
+| 25 | 200 | 4.00% |
+| 50 | 400 | 8.00% |
+
+**Purging** drops training rows whose label interval overlaps the test window —
+the defining property, checkable directly via `assert_no_leakage`, which works
+on splits from any splitter rather than requiring trust. **Embargo** then drops
+rows starting just *after* the test window, since serial correlation leaks
+through adjacency even when the windows do not touch.
+
+There is no option to disable purging. FR-14 says naive k-fold must not be
+offered, and a flag would be exactly that with an extra step — the leaky path
+would become the one people take when the honest numbers disappoint.
