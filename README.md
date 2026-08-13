@@ -120,3 +120,37 @@ The period is immutable once defined, registrations are content-hashed and
 single-use, and evaluations cannot be deleted or edited — all enforced by SQLite
 triggers. A holdout you can move after seeing results is not a holdout, and an
 exhaustion count you can reset is not a count.
+
+## Null-result benchmark (FR-16, acceptance criteria 4 & 5)
+
+```bash
+python3 scripts/null_benchmark_demo.py
+```
+
+The PRD calls criterion 5 "the most valuable acceptance test in this document"
+and says to run it early, publicly, in front of everyone who will use the tool.
+It runs one parameter sweep against a returns series, then the identical sweep
+against those same returns **reshuffled**:
+
+```
+                                AS GIVEN    RESHUFFLED
+  ----------------------------------------------------
+  trials counted                   7,866         7,866
+  best raw Sharpe                 0.0163        0.0303
+  best parameters               (22, 25)       (9, 16)
+  DEFLATED Sharpe                 0.0930        0.3702
+```
+
+Reshuffling preserves the marginal distribution exactly — same mean, volatility,
+skew and kurtosis — while destroying every temporal relationship a trading rule
+could exploit. There is nothing left to find. So the reshuffled column is the
+score this *procedure* manufactures from noise at this trial count.
+
+Here it scored **higher** than the real data. The raw Sharpe was measuring
+search intensity, not signal. The deflated Sharpe is the headline figure
+(FR-09), and both fall far below 0.95 — the correct answer, which the raw figure
+alone would have obscured in both columns.
+
+The harness registers the entire sweep before evaluating any of it, so a search
+cannot be truncated at the moment it starts looking good and reported as though
+it had always been that size.

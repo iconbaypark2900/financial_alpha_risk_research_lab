@@ -6,6 +6,13 @@ version invented approximations the papers do not contain, and every invariant
 test passed while it did.
 """
 from .holdout import HoldoutViolation, ProtectedHoldout
+from .search import (
+    compare_to_null,
+    crossover_grid,
+    moving_average_crossover,
+    null_benchmark,
+    run_search,
+)
 from .trial_counter import TrialCounter, TrialCounterError
 from .core import (
     EULER_MASCHERONI,
@@ -18,6 +25,11 @@ from .core import (
 
 __all__ = [
     "HoldoutViolation",
+    "compare_to_null",
+    "crossover_grid",
+    "moving_average_crossover",
+    "null_benchmark",
+    "run_search",
     "ProtectedHoldout",
     "TrialCounter",
     "TrialCounterError",

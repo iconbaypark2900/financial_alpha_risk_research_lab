@@ -197,6 +197,55 @@ class TrialCounter:
                 "WHERE trial_id = ?",
                 (float(sharpe), n_observations, _utcnow(), trial_id))
 
+    def start_trials(self, dataset_id: str, param_sets: list[dict[str, Any]], *,
+                     strategy: str | None = None, search_id: str | None = None,
+                     researcher: str | None = None,
+                     dataset_version: str | None = None) -> list[str]:
+        """Register an entire sweep up front, in one transaction.
+
+        For a parameter search this is not merely faster, it is *stricter*: the
+        full trial count is committed before a single result exists, so the
+        search cannot be quietly truncated at the point it starts looking good.
+        You declare how hard you are about to look, then look.
+        """
+        if not dataset_id or not str(dataset_id).strip():
+            raise ValueError("dataset_id is required")
+        if not param_sets:
+            raise ValueError("a search with no parameter sets is not a search")
+
+        now = _utcnow()
+        rows = []
+        ids = []
+        for params in param_sets:
+            trial_id = str(uuid.uuid4())
+            ids.append(trial_id)
+            rows.append((trial_id, dataset_id, dataset_version, search_id,
+                         researcher, strategy,
+                         json.dumps(params, sort_keys=True) if params else None,
+                         now))
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO trials (trial_id, dataset_id, dataset_version, "
+                "search_id, researcher, strategy, params_json, started_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        return ids
+
+    def record_outcomes(self, outcomes: dict[str, float], *,
+                        n_observations: int | None = None) -> None:
+        """Attach results to many already-counted trials, in one transaction.
+
+        Trials absent from `outcomes` keep their NULL sharpe and still count —
+        a sweep whose members failed to evaluate has still consumed those looks.
+        """
+        now = _utcnow()
+        rows = [(float(v), n_observations, now, k) for k, v in outcomes.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+                and math.isfinite(v)]
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE trials SET sharpe = ?, n_observations = ?, outcome_at = ? "
+                "WHERE trial_id = ? AND sharpe IS NULL", rows)
+
     @contextmanager
     def trial(self, dataset_id: str, **kwargs) -> Iterator["_TrialHandle"]:
         """Context manager that counts the trial even if the body raises.
