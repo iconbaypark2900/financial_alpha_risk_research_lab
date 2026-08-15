@@ -95,20 +95,20 @@ pytest tests/ -v
 ## Example Output
 
 ```
-🚀 FinGuard Demo - Portfolio Risk Management
+FinGuard Demo - Portfolio Risk Management
 ==================================================
 
-📊 Portfolio Configuration:
+Portfolio Configuration:
 Assets: ['Risk-Free (T-Bills)', 'Stocks', 'Bonds']
 Expected Returns: ['2.0%', '8.0%', '5.0%']
 Volatilities: ['1.0%', '15.0%', '8.0%']
 
-🎯 Kelly Criterion Optimization:
+Kelly Criterion Optimization:
   Risk-Free (T-Bills): 15.2%
   Stocks: 52.8%
   Bonds: 32.0%
 
-📈 Simulation Results:
+Simulation Results:
   Expected Annual Return: 6.8%
   Annual Volatility: 8.9%
   Sharpe Ratio: 0.76
