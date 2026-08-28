@@ -119,6 +119,49 @@ def _moving_average(x: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(x, kernel, mode="valid")
 
 
+def moving_average_timing(prices, window: int) -> tuple:
+    """Faber (2007): hold the asset above its `window`-day mean, cash below.
+
+    Distinct from `moving_average_crossover`, which compares two averages of the
+    asset against each other. This compares the asset to ONE average and is
+    long-or-flat, so it is a timing rule rather than a trend rule — and the
+    difference matters for what it can be scored against. Being long-or-flat, it
+    inherits the drift whenever it is invested, which is why the honest
+    comparison is against buy-and-hold over the SAME sample rather than against
+    zero.
+
+    Source: Faber, M. (2007), "A Quantitative Approach to Tactical Asset
+    Allocation", Journal of Wealth Management 9(4). The published rule is
+    monthly on a 10-month average; the daily 200-day form used here is the one
+    practitioners actually run.
+
+    The signal formed on bar t is traded on t+1. There is no option to trade the
+    bar you decided on: that is the look-ahead this package exists to prevent,
+    and it is worth about half the reported edge in rules of this shape.
+
+    Returns (strategy_returns, market_returns, exposure) over the aligned
+    sample, so a caller cannot accidentally compare the rule against a
+    buy-and-hold computed on a longer window.
+    """
+    import numpy as np
+
+    prices = np.asarray(prices, dtype=float)
+    if not isinstance(window, int) or window < 2:
+        raise ValueError(f"window must be an integer of at least 2, got {window!r}")
+    if prices.size <= window + 1:
+        raise ValueError(
+            f"need more than {window + 1} prices for window={window}, "
+            f"got {prices.size}")
+    if np.any(prices <= 0) or not np.all(np.isfinite(prices)):
+        raise ValueError("prices must be finite and positive")
+
+    mean = np.convolve(prices, np.ones(window) / window, mode="valid")
+    aligned = prices[window - 1:]
+    signal = (aligned > mean).astype(float)[:-1]      # decided at t, traded t+1
+    market = np.diff(aligned) / aligned[:-1]
+    return signal * market, market, float(signal.mean())
+
+
 def crossover_grid(max_fast: int = 70, max_slow: int = 150) -> list[dict[str, int]]:
     """Every (fast, slow) pair with fast < slow. A small grid, many trials."""
     return [{"fast": f, "slow": s}

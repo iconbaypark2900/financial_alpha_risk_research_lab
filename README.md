@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-422 tests pass, on every push. Two caveats the row labels are too small to hold:
+430 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 422 passed
+.venv/bin/python -m pytest -q                      # 430 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **329 of the 422 tests**; the point-in-time store and the engine
+alone and runs **329 of the 430 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -381,6 +381,78 @@ through adjacency even when the windows do not touch.
 There is no option to disable purging. FR-14 says naive k-fold must not be
 offered, and a flag would be exactly that with an extra step — the leaky path
 would become the one people take when the honest numbers disappoint.
+
+## Pointing it at a strategy someone believes in
+
+```bash
+python3 scripts/believed_strategy.py
+```
+
+Declaring noise to be noise is a demo. This is the product: take a rule a large
+number of practitioners commit real money to, pre-register the claim its
+believers make, and report which half survives.
+
+**Faber (2007)**, *A Quantitative Approach to Tactical Asset Allocation* — hold
+the index above its long moving average, cash below. Its claim is specific:
+equity-like returns with materially smaller drawdowns.
+
+This is the case pre-registration exists for and had never been used on. The
+rule was specified in public in 2007, before this sample existed, so the
+multiple-testing burden really is N=1 — unlike the 2,691-variant sweep, which
+has to be punished for what it is.
+
+### Is it the rule, or is it the number 200?
+
+```
+Sharpe across 9 windows:   +0.559 to +0.783   (spread 0.224)
+drawdown across the same:   19.2% to 25.7%    vs buy-and-hold 33.9%
+best window is 250, not 200
+```
+
+Every window cuts the drawdown, by a lot. The Sharpe varies by **0.224** across
+windows — wider than the **0.021** gap between the rule and buy-and-hold. So the
+drawdown claim is a property of the rule; any Sharpe claim for one window sits
+inside the noise of having picked that window.
+
+### What pre-registration is actually worth
+
+| | trials | deflated |
+|---|---:|---:|
+| committed to 200 in advance | 1 | 0.9704 |
+| best of 9 windows | 9 | 0.9651 |
+| the sweep from the other script | 2,691 | 0.9152 |
+
+Worth being precise about the size: at N=9 the penalty is **0.005**, which is
+almost nothing. Nine windows is not a fishing expedition. The deflation is built
+to punish the third line, and does — the burden scales with how much of the
+space you swept, not with the fact that you looked more than once.
+
+### The holdout, spent once
+
+```
+                        buy & hold       MA rule
+  annualised Sharpe         +1.073        +1.106
+  max drawdown               18.9%         10.1%
+
+  'drawdown below two thirds of buy-and-hold'     HELD
+  'Sharpe no worse than buy-and-hold less 0.05'   HELD
+```
+
+Both legs held, which is an uncommon result here and is **not** vindication. The
+holdout is 414 trading days — one period, one regime, and no drawdown in it deep
+enough to be the test the rule exists for. The drawdown claim is the durable
+half, because all nine windows cut it in and out of sample. The Sharpe claim
+held, but a result smaller than the spread of the choices that produced it is
+not yet evidence about the rule.
+
+The registration is now spent. A second look at this family is flagged, and the
+warning escalates:
+
+```
+look 1:  no warning
+look 2:  HOLDOUT EXHAUSTION — treat the result as optimistic
+look 4:  HOLDOUT EXHAUSTED — in-sample data; a fresh holdout is required
+```
 
 ## Real data, end to end
 

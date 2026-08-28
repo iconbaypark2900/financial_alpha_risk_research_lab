@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **422 tests pass** (`pytest -q`), 329 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **430 tests pass** (`pytest -q`), 329 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -70,6 +70,13 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   2,691 moving-average variants beat buy-and-hold, and the reshuffled series
   scored higher than the real one. FR-03/04/05 are STILL not implemented —
   index levels are a survivorship-adjusted composite, not a universe.
+- **The machine has now been pointed at a believed strategy** (2026-08-28,
+  `scripts/believed_strategy.py`): Faber's 200-day timing rule, pre-registered
+  before evaluation, the first real use of the holdout machinery. Verdict: the
+  DRAWDOWN claim is durable (all 9 windows cut it, in and out of sample); the
+  SHARPE claim sits inside the 0.224 spread of window choice against a 0.021
+  gap to buy-and-hold. Both legs held on a 414-day holdout, which is a result
+  and not a vindication.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on

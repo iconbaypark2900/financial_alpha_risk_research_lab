@@ -280,3 +280,85 @@ def test_excess_returns_remove_the_drift_the_shuffle_preserves():
 def test_an_unknown_mode_is_refused():
     with pytest.raises(ValueError, match="unknown mode"):
         moving_average_crossover(noise(500), 5, 20, mode="magic")
+
+
+# --- moving_average_timing: a rule people actually believe in ---------------
+
+def test_timing_rule_is_long_only_when_price_is_above_its_mean():
+    """Hand-checkable: a series that rises then falls through its own mean."""
+    from src.research_integrity.search import moving_average_timing
+
+    prices = np.array([10.0, 10.0, 10.0, 12.0, 14.0, 8.0, 6.0, 6.0])
+    strategy, market, exposure = moving_average_timing(prices, window=3)
+    means = np.convolve(prices, np.ones(3) / 3, mode="valid")
+    aligned = prices[2:]
+    expected_signal = (aligned > means).astype(float)[:-1]
+    assert exposure == pytest.approx(expected_signal.mean())
+    assert strategy == pytest.approx(expected_signal * market)
+
+
+def test_the_signal_is_traded_the_day_after_it_is_formed():
+    """The look-ahead that is worth about half the edge in rules of this shape.
+
+    Moving only the FINAL price cannot change any return the rule already
+    earned, because the last signal is acted on a bar that does not exist yet.
+    """
+    from src.research_integrity.search import moving_average_timing
+
+    prices = np.asarray(100 * 1.001 ** np.arange(60))
+    base, _, _ = moving_average_timing(prices, window=10)
+    moved = prices.copy()
+    moved[-1] *= 3.0
+    after, _, _ = moving_average_timing(moved, window=10)
+    assert base[:-1] == pytest.approx(after[:-1])
+
+
+def test_the_timing_rule_reads_no_further_forward_than_that():
+    """Checked with the factor library's own causality harness rather than by
+    argument: perturb the future, require the past not to move."""
+    from src.research_integrity.factors import assert_causal
+    from src.research_integrity.search import moving_average_timing
+
+    prices = np.asarray(100 * np.exp(np.cumsum(
+        np.random.default_rng(0).normal(0, 0.01, 400))))
+
+    def signal_path(series):
+        strategy, _, _ = moving_average_timing(series, window=50)
+        # Pad back to the input length so the harness can compare positions.
+        return np.concatenate([np.full(series.size - strategy.size, np.nan),
+                               strategy])
+
+    assert_causal(signal_path, prices, split=350)
+
+
+def test_market_returns_cover_the_same_sample_as_the_strategy():
+    """Returned together so a caller cannot compare the rule against a
+    buy-and-hold computed over a longer window — which flatters whichever of
+    the two saw the better period."""
+    from src.research_integrity.search import moving_average_timing
+
+    prices = np.asarray(100 * 1.001 ** np.arange(100))
+    strategy, market, _ = moving_average_timing(prices, window=20)
+    assert strategy.shape == market.shape
+
+
+def test_a_fully_invested_rule_equals_buy_and_hold():
+    """A monotonically rising series is always above its trailing mean."""
+    from src.research_integrity.search import moving_average_timing
+
+    prices = np.asarray(100 * 1.01 ** np.arange(80))
+    strategy, market, exposure = moving_average_timing(prices, window=20)
+    assert exposure == pytest.approx(1.0)
+    assert strategy == pytest.approx(market)
+
+
+@pytest.mark.parametrize("prices, window", [
+    (np.array([1.0, 2.0, 3.0]), 10),          # too short
+    (np.array([1.0, -2.0, 3.0, 4.0, 5.0]), 2),  # non-positive
+    (np.asarray(100 * 1.01 ** np.arange(50)), 1),  # degenerate window
+])
+def test_bad_timing_inputs_are_refused(prices, window):
+    from src.research_integrity.search import moving_average_timing
+
+    with pytest.raises(ValueError):
+        moving_average_timing(prices, window)
