@@ -206,11 +206,33 @@ def test_volatility_uses_the_sample_correction_like_the_rest_of_the_repo(curve):
 
 # --- refusals --------------------------------------------------------------
 
-@pytest.mark.parametrize("bad", [[], [100.0, -5.0], [100.0, 0.0],
+@pytest.mark.parametrize("bad", [[], [100.0, -5.0], [0.0, 100.0],
                                  [100.0, float("nan")]])
 def test_bad_equity_curves_are_refused(bad):
     with pytest.raises(DrawdownError):
         drawdown_series(bad)
+
+
+def test_a_curve_that_reaches_zero_is_a_hundred_percent_drawdown():
+    """Ruin is a meaningful answer, not malformed input.
+
+    The simulator produces exactly these curves when a levered path is wiped
+    out, and this module was rejecting its output: `max_drawdown(result.paths[i])`
+    raised DrawdownError for every ruined path. The ratio measures accept zero
+    because the running peak is positive whenever the curve starts positive.
+    """
+    assert max_drawdown([100.0, 50.0, 0.0]) == pytest.approx(1.0)
+    assert drawdown_series([100.0, 0.0])[-1] == pytest.approx(-1.0)
+    # Drawdowns [0, -1]; RMS = sqrt((0 + 1) / 2) = sqrt(0.5).
+    assert ulcer_index([100.0, 0.0], in_percent=False) == pytest.approx(
+        math.sqrt(0.5), rel=1e-12)
+
+
+def test_risk_metrics_still_refuses_a_ruined_curve():
+    """It differences into per-period returns, and a zero denominator there is
+    an infinity rather than a fact."""
+    with pytest.raises(DrawdownError):
+        risk_metrics([100.0, 50.0, 0.0, 10.0])
 
 
 def test_too_short_a_curve_for_a_variance_is_refused():
@@ -229,3 +251,24 @@ def test_a_drawdown_outside_zero_to_one_is_refused():
         recovery_time(1.5, 0.1)
     with pytest.raises(DrawdownError):
         recovery_time(-0.1, 0.1)
+
+
+def test_a_degenerate_variance_gives_infinity_not_a_huge_number():
+    """`sd > 0` caught only an exactly-zero deviation, so constant compound
+    growth returned a Sharpe of 9.18e12 from a standard deviation of 1.09e-16 —
+    unusable, and indistinguishable from a computed figure. Infinity is both the
+    true value and unmistakably degenerate."""
+    metrics = risk_metrics([100.0 * 1.001 ** i for i in range(200)])
+    assert metrics.sharpe_per_period == math.inf
+    assert metrics.sharpe_annualised == math.inf
+
+
+def test_a_flat_curve_still_gives_zero_rather_than_infinity():
+    metrics = risk_metrics([100.0] * 50)
+    assert metrics.sharpe_per_period == 0.0
+
+
+def test_var_is_never_a_negative_loss():
+    """On an all-gains series the quantile is positive and negating it returned
+    a NEGATIVE loss, contradicting the docstring directly above it."""
+    assert historical_var([0.01, 0.02, 0.03, 0.04], 0.95) == 0.0

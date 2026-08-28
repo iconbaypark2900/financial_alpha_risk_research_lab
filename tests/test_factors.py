@@ -261,6 +261,48 @@ def test_a_restatement_does_not_reach_back(store):
                                 market_cap=1000.0) == pytest.approx(0.5)
 
 
+def test_a_restatement_does_not_reach_forward_either(store):
+    """FR-02, on the case the other restatement test does not reach.
+
+    `test_a_restatement_does_not_reach_back` queries at 2024-02-20, BEFORE the
+    March restatement exists, so it passes whatever the selection logic does.
+    Querying AFTER it — which is when a researcher would actually run — exposed
+    the bug: `facts[-1]` from an `as_of` result ordered by (effective_date,
+    knowledge_date) takes the highest knowledge_date, i.e. the restatement.
+    It returned 0.4 where FR-02 requires the 0.5 that was on the wire.
+    """
+    store.append_facts("fundamentals", [
+        {"entity_id": "ACME", "field": "book_equity", "value": 400.0,
+         "effective_date": "2023-12-31", "knowledge_date": "2024-03-20",
+         "is_restatement": True},
+    ])
+    assert book_to_market_as_of(store, "fundamentals", "ACME",
+                                knowledge_date="2024-04-01",
+                                market_cap=1000.0) == pytest.approx(0.5)
+
+
+def test_the_latest_known_period_wins_but_its_first_report_is_used(store):
+    """Two selections that must not be conflated: the most recent fiscal period
+    KNOWN by the date, and within it the value FIRST reported."""
+    store.append_facts("fundamentals", [
+        # A later period, filed later still.
+        {"entity_id": "ACME", "field": "book_equity", "value": 600.0,
+         "effective_date": "2024-03-31", "knowledge_date": "2024-05-15"},
+        # …and restated.
+        {"entity_id": "ACME", "field": "book_equity", "value": 550.0,
+         "effective_date": "2024-03-31", "knowledge_date": "2024-06-20",
+         "is_restatement": True},
+    ])
+    # Before Q1 is filed: still the Q4 figure, as first reported.
+    assert book_to_market_as_of(store, "fundamentals", "ACME",
+                                knowledge_date="2024-04-01",
+                                market_cap=1000.0) == pytest.approx(0.5)
+    # After Q1 is filed and restated: Q1's FIRST report, not its restatement.
+    assert book_to_market_as_of(store, "fundamentals", "ACME",
+                                knowledge_date="2024-07-01",
+                                market_cap=1000.0) == pytest.approx(0.6)
+
+
 def test_the_factor_refuses_a_dataset_with_no_point_in_time_guarantee(tmp_path):
     """FR-07 propagates: a factor over a non-PIT dataset must refuse, not warn."""
     pytest.importorskip("duckdb", reason="the point-in-time store needs duckdb")

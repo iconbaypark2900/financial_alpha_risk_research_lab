@@ -39,7 +39,10 @@ def documented() -> set[str]:
 @pytest.fixture(scope="module")
 def cited_in_code() -> set[str]:
     found: set[str] = set()
-    for path in (ROOT / "src" / "research_integrity").glob("*.py"):
+    # All of src/, not just research_integrity: src/portfolio/ cites FR-14 and
+    # FR-23 and was invisible to this guard, so a requirement referenced only
+    # from the V1 package would not have to appear in the map at all.
+    for path in (ROOT / "src").rglob("*.py"):
         found |= _numbers(path.read_text(encoding="utf-8"))
     return found
 

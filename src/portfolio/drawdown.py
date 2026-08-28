@@ -52,7 +52,20 @@ class DrawdownError(ValueError):
     """A drawdown metric could not be computed from the inputs given."""
 
 
-def _equity(values: Sequence[float]) -> np.ndarray:
+def _equity(values: Sequence[float], *, allow_ruin: bool = False) -> np.ndarray:
+    """Validate an equity curve.
+
+    `allow_ruin` permits zeros. A path that reaches zero has a 100% drawdown,
+    which is a meaningful answer, and the simulator produces exactly such curves
+    when a levered path is wiped out — its own `paths` were being rejected by
+    this module's primitives. Negatives stay refused: a ratio against a negative
+    equity is meaningless rather than large.
+
+    Ratio-based measures (drawdown, Ulcer) accept ruin because the running peak
+    is positive whenever the curve starts positive. `risk_metrics` does not,
+    because it differences into per-period returns and a zero denominator there
+    is an infinity rather than a fact.
+    """
     arr = np.asarray(values, dtype=float)
     if arr.ndim != 1:
         raise DrawdownError(f"values must be 1-D, got shape {arr.shape}")
@@ -60,7 +73,10 @@ def _equity(values: Sequence[float]) -> np.ndarray:
         raise DrawdownError("values is empty")
     if not np.all(np.isfinite(arr)):
         raise DrawdownError("values must be finite")
-    if np.any(arr <= 0):
+    if arr[0] <= 0:
+        raise DrawdownError("the first value must be positive; there is nothing "
+                            "for a drawdown to be measured against otherwise")
+    if np.any(arr < 0) or (not allow_ruin and np.any(arr == 0)):
         raise DrawdownError(
             "values must be positive — a drawdown is a ratio against a running "
             "peak, and a non-positive equity makes it meaningless rather than "
@@ -75,7 +91,7 @@ def drawdown_series(values: Sequence[float]) -> np.ndarray:
     absolute, so that summing or averaging cannot silently turn losses into
     gains.
     """
-    arr = _equity(values)
+    arr = _equity(values, allow_ruin=True)
     peak = np.maximum.accumulate(arr)
     return (arr - peak) / peak
 
@@ -125,7 +141,11 @@ def historical_var(returns: Sequence[float], confidence: float = 0.95) -> float:
         raise DrawdownError("returns must be finite")
     if not 0.0 < confidence < 1.0:
         raise DrawdownError(f"confidence must be in (0, 1), got {confidence}")
-    return float(-np.percentile(arr, (1.0 - confidence) * 100.0))
+    # Floored at zero: on an all-gains series the quantile is positive and the
+    # negation made this return a NEGATIVE loss, contradicting the docstring
+    # directly above it. A VaR of zero is the honest reading — no loss at that
+    # confidence — and a negative one invites a sign error downstream.
+    return max(0.0, float(-np.percentile(arr, (1.0 - confidence) * 100.0)))
 
 
 def ulcer_index(values: Sequence[float], *, in_percent: bool = True) -> float:
@@ -210,8 +230,18 @@ def risk_metrics(values: Sequence[float], *,
         raise DrawdownError(f"trading_days must be positive, got {trading_days}")
 
     returns = np.diff(arr) / arr[:-1]
+    mean = float(np.mean(returns))
     sd = float(np.std(returns, ddof=1))
-    sharpe = float(np.mean(returns) / sd) if sd > 0 else 0.0
+
+    # `sd > 0` caught only an exactly-zero deviation, so a constant-growth curve
+    # whose sd is float-rounding noise returned a Sharpe of 9.18e12 — unusable,
+    # and indistinguishable from a computed figure. Degenerate is now infinite,
+    # which is both the true value and unmistakable.
+    degenerate = sd <= 1e-12 * max(1.0, abs(mean))
+    if degenerate:
+        sharpe = 0.0 if mean == 0.0 else math.copysign(math.inf, mean)
+    else:
+        sharpe = mean / sd
     scale = math.sqrt(trading_days)
 
     return RiskMetrics(

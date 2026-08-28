@@ -51,7 +51,7 @@ the honest numbers disappoint.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -96,7 +96,11 @@ def fractional(full_kelly: float, fraction: float = HALF_KELLY) -> float:
     """
     if not 0.0 < fraction <= 1.0:
         raise KellyError(f"fraction must be in (0, 1], got {fraction}")
-    return max(0.0, full_kelly * fraction)
+    # The sign is PRESERVED. This floored at zero, which is the behaviour
+    # `kelly_fraction` above criticises finGuard for — and `KellyAllocation
+    # .scaled()`, the other way to scale a Kelly, preserved it, so the two
+    # disagreed about what half of a negative edge means.
+    return full_kelly * fraction
 
 
 def growth_rate(bet_fraction: float, win_prob: float,
@@ -137,7 +141,7 @@ class KellyAllocation:
     not be made to: `cash_weight` is the remainder, and it is negative exactly
     when the allocation is levered.
     """
-    weights: np.ndarray
+    weights: np.ndarray = field(compare=False)
     cash_weight: float
     gross_leverage: float
     risk_free_rate: float
@@ -195,6 +199,25 @@ def portfolio_kelly(expected_returns, covariance, *,
         raise KellyError("expected_returns and covariance must be finite")
     if not np.allclose(sigma, sigma.T, rtol=1e-9, atol=1e-12):
         raise KellyError("covariance must be symmetric")
+    if not math.isfinite(risk_free_rate):
+        raise KellyError(
+            f"risk_free_rate must be finite, got {risk_free_rate} — an unchecked "
+            "NaN here produces a NaN allocation that still looks like a portfolio")
+
+    # Symmetry is necessary and not sufficient. A symmetric matrix with a
+    # negative eigenvalue is not a covariance, solves without complaint, and
+    # returns a plausible-looking portfolio: [[1e-4, 5e-4], [5e-4, 9e-5]] gave
+    # weights [0.473, 0.705] at leverage 1.18. np.linalg.solve raises only on
+    # EXACT singularity, so the docstring's argument below — that answering
+    # anyway hides a data problem behind a plausible portfolio — applies here at
+    # least as strongly.
+    eigenvalues = np.linalg.eigvalsh(sigma)
+    tolerance = -1e-10 * max(1.0, float(np.max(np.abs(eigenvalues))))
+    if float(np.min(eigenvalues)) < tolerance:
+        raise KellyError(
+            f"covariance is not positive semi-definite (smallest eigenvalue "
+            f"{float(np.min(eigenvalues)):.3e}), so it is not a covariance "
+            "matrix and the Kelly optimum is undefined")
 
     excess = mu - risk_free_rate
     try:

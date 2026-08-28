@@ -48,10 +48,16 @@ def test_a_negative_edge_returns_a_negative_fraction():
     assert kelly_fraction(0.4, 1.0) < 0
 
 
-def test_fractional_kelly_halves_and_floors():
+def test_fractional_kelly_halves_and_keeps_the_sign():
+    """Half of a negative edge is a smaller negative edge, not zero.
+
+    This floored at zero — the exact behaviour `kelly_fraction` is criticised
+    for two tests above, and the opposite of what `KellyAllocation.scaled()`
+    does with the same input, so the two ways to scale a Kelly disagreed.
+    """
     assert fractional(0.4) == pytest.approx(0.2)
     assert fractional(0.4, 1.0) == pytest.approx(0.4)
-    assert fractional(-0.4) == 0.0, "a negative edge is not a short via this path"
+    assert fractional(-0.4) == pytest.approx(-0.2)
     assert HALF_KELLY == 0.5
 
 
@@ -200,3 +206,49 @@ def test_bad_portfolio_inputs_are_refused(mu, cov):
 def test_bad_single_bet_inputs_are_refused(p, b):
     with pytest.raises(KellyError):
         kelly_fraction(p, b)
+
+
+# --- found by review, 2026-08-28 -------------------------------------------
+
+def test_a_non_finite_risk_free_rate_is_refused():
+    """It was unvalidated, so a NaN rate produced a NaN allocation with no
+    error — and a NaN portfolio still looks like a portfolio, which is the
+    failure mode `growth_rate`'s docstring calls out one function earlier."""
+    with pytest.raises(KellyError, match="risk_free_rate must be finite"):
+        portfolio_kelly(MU_OK, COV_OK, risk_free_rate=float("nan"))
+    with pytest.raises(KellyError, match="risk_free_rate must be finite"):
+        portfolio_kelly(MU_OK, COV_OK, risk_free_rate=float("inf"))
+
+
+def test_a_symmetric_but_non_psd_covariance_is_refused():
+    """Symmetry is necessary and not sufficient.
+
+    [[1e-4, 5e-4], [5e-4, 9e-5]] is symmetric with a negative eigenvalue — not a
+    covariance — and solved fine, returning weights [0.473, 0.705] at leverage
+    1.18 with no complaint. np.linalg.solve raises only on exact singularity.
+    """
+    not_psd = np.array([[1e-4, 5e-4], [5e-4, 9e-5]])
+    assert np.allclose(not_psd, not_psd.T), "the fixture must be symmetric"
+    assert np.min(np.linalg.eigvalsh(not_psd)) < 0
+    with pytest.raises(KellyError, match="positive semi-definite"):
+        portfolio_kelly(MU_OK, not_psd)
+
+
+def test_a_valid_covariance_is_still_accepted():
+    """The PSD check must not reject real covariances, including singular-ish
+    ones that are merely ill-conditioned but genuinely PSD."""
+    fine = np.array([[1e-4, 2e-5], [2e-5, 9e-5]])
+    assert portfolio_kelly(MU_OK, fine).weights.shape == (2,)
+
+
+def test_allocations_can_be_compared_and_are_not_ambiguous():
+    """Frozen dataclasses holding ndarrays raise on `==` unless the array fields
+    are excluded from comparison. RiskMetrics did this and these did not."""
+    a = portfolio_kelly(MU_OK, COV_OK)
+    b = portfolio_kelly(MU_OK, COV_OK)
+    assert a == b                      # would raise ValueError before
+    assert a != portfolio_kelly(MU_OK, COV_OK, risk_free_rate=0.0001)
+
+
+MU_OK = np.array([0.0004, 0.0003])
+COV_OK = np.array([[0.0001, 0.00002], [0.00002, 0.00009]])

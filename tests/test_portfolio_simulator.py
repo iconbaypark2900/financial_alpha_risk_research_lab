@@ -276,6 +276,37 @@ def test_every_scenario_gets_its_own_seed_and_stays_reproducible():
     assert len(seeds) == len(scenarios), "scenarios must be independent draws"
 
 
+def test_stress_holds_the_portfolio_fixed_across_scenarios():
+    """A stress test shocks the world, not the portfolio.
+
+    `stress` forwarded the shocked moments to `simulate` with weights=None, so
+    each scenario re-ran portfolio_kelly on them and re-optimised for its own
+    shock. market_crash flipped the target to a SHORT and reported +8.99%
+    annualised with a 42% probability of loss — a crash shown as a profit —
+    while bull_market levered to 4.09x. Four unrelated optimisations wearing
+    scenario names.
+
+    The only scenario test that existed passed explicit weights, so it never
+    touched the default path. This one deliberately does not.
+    """
+    base = simulate(MU, COV, seed=1, n_paths=200, horizon=126)
+    results = stress(MU, COV, scenarios=sample_scenarios(), seed=1,
+                     n_paths=200, horizon=126)
+    for name, result in results.items():
+        assert result.target_weights == pytest.approx(base.target_weights), (
+            f"scenario {name!r} re-optimised instead of being stressed")
+
+
+def test_a_crash_is_a_loss_when_the_portfolio_is_not_re_optimised():
+    """The consequence, on the default path rather than an explicit-weights one."""
+    results = stress(MU, COV, scenarios=sample_scenarios(), seed=1,
+                     n_paths=400, horizon=252)
+    crash = statistics(results["market_crash"])
+    assert crash.mean_annualised_return < 0, (
+        f"a market crash returned {crash.mean_annualised_return:+.4f}")
+    assert crash.probability_of_loss > 0.5
+
+
 def test_the_crash_scenario_is_worse_than_the_bull_scenario():
     results = stress(MU, COV, scenarios=sample_scenarios(), seed=2,
                      n_paths=300, horizon=126, weights=[1.0, 1.0])
@@ -315,3 +346,71 @@ def test_bad_simulation_inputs_are_refused(kwargs):
 def test_malformed_moments_are_refused(mu, cov):
     with pytest.raises(SimulationError):
         simulate(mu, cov, seed=0, n_paths=5, horizon=10)
+
+
+# --- found by review, 2026-08-28 -------------------------------------------
+
+def test_cash_is_financed_at_the_risk_free_rate():
+    """The Kelly target is inv(S) @ (mu - r), which ASSUMES borrowing at r.
+
+    Cash was carried as a constant, so a levered allocation borrowed for
+    nothing. At the cash_weight of -6.5 a full Kelly target reaches, that
+    overstates terminal wealth by roughly 6.5 * r a year — the direction that
+    flatters the strategy, which is the defect class this module documents
+    itself as fixing.
+    """
+    levered = [4.0, 3.0]
+    free = simulate(MU, COV, seed=8, n_paths=300, horizon=252,
+                    weights=levered, risk_free_rate=0.0, drawdown_limit=None)
+    financed = simulate(MU, COV, seed=8, n_paths=300, horizon=252,
+                        weights=levered, risk_free_rate=0.0002,
+                        drawdown_limit=None)
+    assert financed.terminal_values.mean() < free.terminal_values.mean(), (
+        "borrowing must cost something")
+
+
+def test_idle_cash_earns_the_risk_free_rate():
+    """The other direction: an under-invested portfolio should earn on cash."""
+    idle = simulate(MU, COV, seed=8, n_paths=200, horizon=252, weights=[0.0, 0.0],
+                    risk_free_rate=0.0002, initial_value=1000.0)
+    assert idle.terminal_values.mean() > 1000.0
+
+
+def test_an_asymmetric_covariance_is_refused_even_with_explicit_weights():
+    """Explicit weights bypass portfolio_kelly, and numpy then accepts an
+    asymmetric covariance with only a RuntimeWarning pytest hides by default."""
+    asymmetric = np.array([[1e-4, 5e-3], [2e-5, 9e-5]])
+    with pytest.raises(SimulationError, match="symmetric"):
+        simulate(MU, asymmetric, seed=0, n_paths=5, horizon=10,
+                 weights=[0.5, 0.5])
+
+
+def test_results_can_be_compared():
+    a = simulate(MU, COV, seed=0, n_paths=20, horizon=20)
+    b = simulate(MU, COV, seed=0, n_paths=20, horizon=20)
+    assert a == b          # raised ValueError on the ndarray fields before
+
+
+def test_var_is_a_positive_loss_matching_the_drawdown_module():
+    """The identically-named quantity carried opposite signs across two modules
+    of one package."""
+    from src.portfolio.drawdown import historical_var
+
+    stats = statistics(simulate(MU, COV, seed=3, n_paths=500, horizon=126))
+    assert stats.var_95 > 0
+    assert stats.var_99 >= stats.var_95
+    assert stats.expected_shortfall_95 >= stats.var_95
+    assert historical_var([-0.02, 0.01, 0.03, -0.05], 0.95) > 0
+
+
+def test_ruined_paths_are_accepted_by_the_drawdown_primitives():
+    """simulate(keep_paths=True) was emitting equity curves this package's own
+    drawdown functions refused, so the verification test only passed because its
+    parameters happened not to ruin anything."""
+    from src.portfolio.drawdown import max_drawdown
+
+    result = simulate([-0.5], [[0.25]], seed=0, n_paths=50, horizon=100,
+                      weights=[3.0], initial_value=100.0, keep_paths=True)
+    assert result.ruin_probability > 0
+    for path in result.paths:
+        assert 0.0 <= max_drawdown(path) <= 1.0

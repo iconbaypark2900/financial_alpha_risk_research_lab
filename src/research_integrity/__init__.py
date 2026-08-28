@@ -58,7 +58,11 @@ try:  # duckdb is optional; the rest of the module does not need it
         PointInTimeStore,
     )
 except ImportError:  # pragma: no cover
+    # Every name __all__ promises must exist, or `import *` raises AttributeError
+    # in precisely the minimal install this package advertises and CI exercises.
     PointInTimeStore = None  # type: ignore[assignment]
+    LookAheadContamination = None  # type: ignore[assignment]
+    PointInTimeError = None  # type: ignore[assignment]
 try:  # nautilus_trader is heavy and optional; the controls do not need it
     from .backtest import (
         AlmgrenFeeModel,
@@ -70,6 +74,12 @@ try:  # nautilus_trader is heavy and optional; the controls do not need it
         run_backtest,
     )
 except ImportError:  # pragma: no cover
+    AlmgrenFeeModel = None  # type: ignore[assignment]
+    LookAheadAudit = None  # type: ignore[assignment]
+    LookAheadDetected = None  # type: ignore[assignment]
+    MomentumStrategy = None  # type: ignore[assignment]
+    bars_from_prices = None  # type: ignore[assignment]
+    per_period_sharpe = None  # type: ignore[assignment]
     run_backtest = None  # type: ignore[assignment]
 from .search import (
     compare_to_null,

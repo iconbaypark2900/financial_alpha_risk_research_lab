@@ -219,9 +219,21 @@ def book_to_market_as_of(store: Any, dataset_id: str, entity_id: str, *,
                         entity_id=entity_id, field=field)
     if not facts:
         return None
-    # as_of orders by (effective_date, knowledge_date); the last row is the most
-    # recent fiscal period whose figure had actually been published by then.
-    return float(facts[-1]["value"]) / float(market_cap)
+
+    # Two selections, and taking facts[-1] conflated them. `as_of` orders by
+    # (effective_date, knowledge_date), so the last row is the LATEST-KNOWN
+    # value for the latest period — which is the restatement whenever one has
+    # been published by `knowledge_date`. FR-02 asks for as-FIRST-reported.
+    #
+    # It read correctly and returned a look-ahead-contaminated number: with book
+    # equity of 500 filed 2024-02-15 and restated to 400 on 2024-03-20, a query
+    # at 2024-04-01 returned 0.4 where the honest answer is 0.5. The test that
+    # was supposed to guard this only queried at 2024-02-20, before the
+    # restatement existed, so it never reached the failing case.
+    latest_period = max(fact["effective_date"] for fact in facts)
+    for_period = [f for f in facts if f["effective_date"] == latest_period]
+    first_reported = min(for_period, key=lambda f: f["knowledge_date"])
+    return float(first_reported["value"]) / float(market_cap)
 
 
 # --- the invariant, checked rather than trusted ----------------------------

@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **364 tests pass** (`pytest -q`), and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **389 tests pass** (`pytest -q`), 329 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -49,6 +49,12 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   with a RETIRED.md naming the thirteen defects. Its own 23 tests still pass
   from there, which is the hazard rather than a reassurance; a test now fails if
   anything imports `finguard` or if the inbox reappears.
+- An independent review of the 9-commit diff (2026-08-28) found **15 defects in
+  code written this session**, two of them severe: `stress()` re-optimised the
+  portfolio for each scenario, so a market crash reported +8.99% annualised;
+  and `book_to_market_as_of` returned the RESTATEMENT, a direct FR-02 violation.
+  All fixed, each with a regression test. The lesson is the one already in this
+  file about finGuard: tests that exercise code do not check it.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on

@@ -66,8 +66,8 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from .drawdown import DrawdownError, max_drawdown
-from .kelly import HALF_KELLY, KellyError, portfolio_kelly
+from .drawdown import throttle
+from .kelly import HALF_KELLY, portfolio_kelly
 
 TRADING_DAYS = 252
 
@@ -84,13 +84,13 @@ class SimulationResult:
     the defect this module was rewritten around was computing those returns
     against something else.
     """
-    terminal_values: np.ndarray
-    max_drawdowns: np.ndarray
-    initial_value: float
-    horizon: int
-    seed: int
-    target_weights: np.ndarray
-    ruined: np.ndarray
+    terminal_values: np.ndarray = field(compare=False)
+    max_drawdowns: np.ndarray = field(compare=False)
+    initial_value: float = 0.0
+    horizon: int = 0
+    seed: int = 0
+    target_weights: np.ndarray = field(default=None, compare=False)
+    ruined: np.ndarray = field(default=None, compare=False)
     paths: np.ndarray | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -141,6 +141,12 @@ def _validate(mu: np.ndarray, sigma: np.ndarray) -> None:
                               f"covariance has {sigma.shape[0]}")
     if not np.all(np.isfinite(mu)) or not np.all(np.isfinite(sigma)):
         raise SimulationError("expected_returns and covariance must be finite")
+    # Checked here too, not only in portfolio_kelly: a caller supplying explicit
+    # `weights` bypasses the Kelly path entirely, and numpy then accepts an
+    # asymmetric covariance with only a RuntimeWarning that pytest's default
+    # filters hide.
+    if not np.allclose(sigma, sigma.T, rtol=1e-9, atol=1e-12):
+        raise SimulationError("covariance must be symmetric")
 
 
 def simulate(expected_returns: Sequence[float], covariance, *,
@@ -218,6 +224,13 @@ def simulate(expected_returns: Sequence[float], covariance, *,
 
     for step in range(horizon):
         holdings *= 1.0 + draws[:, step, :]
+        # Cash finances the position. The Kelly target is derived as
+        # inv(S) @ (mu - r), which ASSUMES borrowing at r — so carrying cash as
+        # a constant let a levered allocation borrow for nothing. At the
+        # cash_weight of -6.5 a full Kelly target reaches, that overstated
+        # terminal wealth by roughly 6.5 * r a year, in the direction that
+        # flatters the strategy.
+        cash *= 1.0 + risk_free_rate
         value = holdings.sum(axis=1) + cash
 
         # A path that reaches zero is ruined and stays there; letting it go
@@ -239,6 +252,10 @@ def simulate(expected_returns: Sequence[float], covariance, *,
             if drawdown_limit is None:
                 keep = np.ones(n_paths)
             else:
+                # Vectorised form of drawdown.throttle, whose scalar contract is
+                # asserted against this in tests/test_portfolio_simulator.py.
+                # Re-implementing it inline let the two drift and skipped all of
+                # throttle's validation; the arguments are validated above.
                 keep = np.maximum(throttle_floor, 1.0 - drawdown / drawdown_limit)
             holdings = target[None, :] * (value * keep)[:, None]
             cash = value - holdings.sum(axis=1)
@@ -270,10 +287,14 @@ def statistics(result: SimulationResult, *,
     exponent = trading_days / result.horizon
     annualised = np.where(growth > 0, growth ** exponent, 0.0) - 1.0
 
-    var_95 = float(np.percentile(total, 5))
-    var_99 = float(np.percentile(total, 1))
-    tail_95 = total[total <= var_95]
-    tail_99 = total[total <= var_99]
+    # POSITIVE losses, matching drawdown.historical_var. These were signed
+    # returns while its identically-named function returned positive losses, so
+    # the same quantity carried opposite signs in one package — the unlabelled
+    # unit mixing drawdown.py's docstring names as the defect it exists to stop.
+    var_95_return = float(np.percentile(total, 5))
+    var_99_return = float(np.percentile(total, 1))
+    tail_95 = total[total <= var_95_return]
+    tail_99 = total[total <= var_99_return]
 
     return SimulationStatistics(
         mean_annualised_return=float(np.mean(annualised)),
@@ -282,10 +303,12 @@ def statistics(result: SimulationResult, *,
                             if annualised.size > 1 else 0.0,
         probability_of_loss=float(np.mean(total < 0)),
         ruin_probability=result.ruin_probability,
-        var_95=var_95,
-        var_99=var_99,
-        expected_shortfall_95=float(np.mean(tail_95)) if tail_95.size else var_95,
-        expected_shortfall_99=float(np.mean(tail_99)) if tail_99.size else var_99,
+        var_95=-var_95_return,
+        var_99=-var_99_return,
+        expected_shortfall_95=-(float(np.mean(tail_95)) if tail_95.size
+                                else var_95_return),
+        expected_shortfall_99=-(float(np.mean(tail_99)) if tail_99.size
+                                else var_99_return),
         mean_max_drawdown=float(np.mean(result.max_drawdowns)),
         max_drawdown_95=float(np.percentile(result.max_drawdowns, 95)),
         max_drawdown_99=float(np.percentile(result.max_drawdowns, 99)),
@@ -312,6 +335,23 @@ def stress(expected_returns: Sequence[float], covariance, *,
     _validate(mu, sigma)
     if not scenarios:
         raise SimulationError("no scenarios given")
+
+    # THE PORTFOLIO UNDER TEST IS FIXED. Forwarding the shocked moments to
+    # `simulate` with weights=None made it re-run portfolio_kelly on them, so
+    # each scenario re-optimised for its own shock instead of being stressed by
+    # it. The market_crash scenario flipped the target to a SHORT and reported
+    # +8.99% annualised with a 42% probability of loss — a crash shown as a
+    # profit — while bull_market levered to 4.09x. That is not a stress test; it
+    # is four unrelated optimisations wearing scenario names.
+    #
+    # So the Kelly target is computed ONCE, from the UNSHOCKED moments, and
+    # passed to every scenario.
+    if kwargs.get("weights") is None:
+        kwargs = dict(kwargs)
+        kwargs["weights"] = portfolio_kelly(
+            mu, sigma,
+            risk_free_rate=kwargs.get("risk_free_rate", 0.0),
+        ).scaled(kwargs.get("kelly_fraction", HALF_KELLY)).weights
 
     results: dict[str, SimulationResult] = {}
     for offset, (name, params) in enumerate(sorted(scenarios.items())):

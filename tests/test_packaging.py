@@ -107,3 +107,69 @@ def test_there_is_no_second_pytest_config():
     for stray in ("pytest.ini", "tox.ini", "setup.cfg"):
         assert not (ROOT / stray).exists(), (
             f"{stray} is back; pytest configuration lives in pyproject.toml")
+
+
+# --- found by review, 2026-08-28 -------------------------------------------
+
+def test_every_name_the_package_exports_actually_exists():
+    """`__all__` must be satisfiable in every install this project advertises.
+
+    The optional-import fallbacks bound only `PointInTimeStore = None` and
+    `run_backtest = None`, while `__all__` also lists LookAheadContamination,
+    PointInTimeError, AlmgrenFeeModel, LookAheadAudit, LookAheadDetected,
+    MomentumStrategy, bars_from_prices and per_period_sharpe. In the minimal
+    install the package advertises and CI exercises, `from src.research_integrity
+    import *` therefore raised AttributeError. The CI job only checked
+    `run_backtest is None`, so it passed.
+
+    This runs in both environments and catches the gap in the minimal one.
+    """
+    import src.research_integrity as ri
+
+    missing = [name for name in ri.__all__ if not hasattr(ri, name)]
+    assert not missing, f"__all__ promises {missing}, which the module does not define"
+
+    import src.portfolio as portfolio
+
+    missing = [name for name in portfolio.__all__ if not hasattr(portfolio, name)]
+    assert not missing, f"__all__ promises {missing}, which the module does not define"
+
+
+def test_the_documented_test_count_is_the_real_one(request):
+    """Three documents shipped a stale headline count in one session.
+
+    README said 359 twice, pyproject.toml and requirements.txt said 325, and the
+    suite collected 364. tests/test_readme_is_true.py guards the four numeric
+    tables and the status table; nothing guarded the number readers see first.
+
+    The count comes from the running session's collected items, so it needs no
+    subprocess and cannot recurse. Skipped on a partial run, where the number
+    would be meaningless.
+    """
+    import importlib.util
+
+    # Only the FULL install can produce the documented number. A module-level
+    # importorskip prevents its tests from being collected at all, so the
+    # minimal install legitimately collects fewer — asserting there would fail
+    # on a supported configuration, which is how a guard gets switched off.
+    for optional in ("duckdb", "nautilus_trader"):
+        if importlib.util.find_spec(optional) is None:
+            pytest.skip(f"{optional} absent; this is a minimal install and the "
+                        "documented count is for the full one")
+
+    collected = len(request.session.items)
+    if collected < 100:
+        pytest.skip(f"partial run ({collected} tests); the count is only "
+                    "meaningful for the whole suite")
+
+    claims = {
+        "README.md": [f"{collected} tests pass", f"# {collected} passed"],
+        "pyproject.toml": [f"of {collected} tests"],
+        "requirements.txt": [f"of the {collected} tests"],
+    }
+    for filename, expected in claims.items():
+        text = (ROOT / filename).read_text(encoding="utf-8")
+        for claim in expected:
+            assert claim in text, (
+                f"{filename} does not contain {claim!r}; the suite collects "
+                f"{collected} tests")

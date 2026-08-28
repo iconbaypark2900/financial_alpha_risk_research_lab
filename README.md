@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-359 tests pass, on every push. Two caveats the row labels are too small to hold:
+389 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 359 passed
+.venv/bin/python -m pytest -q                      # 389 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **306 of the 359 tests**; the point-in-time store and the engine
+alone and runs **329 of the 389 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by

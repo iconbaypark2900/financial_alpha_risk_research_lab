@@ -134,7 +134,7 @@ def test_the_audit_catches_future_data_smuggled_into_the_cache():
         audit.assert_clean()
 
 
-def test_the_audit_notices_a_bar_count_that_does_not_match():
+def test_the_audit_notices_more_bars_than_were_delivered():
     """The second property, on its own: data that never came through the bus.
 
     Future data is the obvious contamination. Extra PAST data is the subtle one
@@ -145,8 +145,26 @@ def test_the_audit_notices_a_bar_count_that_does_not_match():
     audit.observe(bar_index=10, current_ts=1_000, visible_count=25,
                   max_visible_ts=900)
     assert not audit.clean
-    assert audit.violations[0]["reason"] == "unexpected bar count"
-    assert audit.violations[0]["expected"] == 11
+    assert audit.violations[0]["reason"] == "more bars visible than delivered"
+    assert audit.violations[0]["delivered"] == 11
+
+
+def test_fewer_visible_bars_than_delivered_is_not_a_violation():
+    """Nautilus keeps bars in a deque(maxlen=bar_capacity), default 10,000, so
+    a long run legitimately sees fewer than it was sent.
+
+    The check was an equality, which turned every bar past the cap into a
+    violation and aborted clean runs of more than 10,000 bars — 40 years of
+    daily data, or a month of minute bars. A guard that fires on correct
+    behaviour gets switched off, and then it guards nothing.
+    """
+    audit = LookAheadAudit()
+    for bar_index in range(60):
+        audit.observe(bar_index=bar_index, current_ts=1_000 + bar_index,
+                      visible_count=min(bar_index + 1, 50),
+                      max_visible_ts=1_000 + bar_index)
+    assert audit.clean, audit.violations
+    assert audit.observations == 60
 
 
 def test_a_contaminated_run_does_not_record_an_outcome(tmp_path, monkeypatch):
@@ -380,3 +398,42 @@ def test_bars_are_strictly_increasing_in_time():
     stamps = [b.ts_event for b in bars]
     assert stamps == sorted(stamps)
     assert len(set(stamps)) == len(stamps)
+
+
+# --- found by review, 2026-08-28 -------------------------------------------
+
+def test_the_strategys_signal_matches_the_factor_library(prices):
+    """The O(1) form must equal what momentum() computes over the same history.
+
+    on_bar called momentum() across the whole history every bar and kept only
+    [-1] — O(n^2), ~50M pure-Python iterations on a 10,000-bar run. The
+    replacement is the definition applied directly, and this pins the two
+    together so the shortcut cannot drift from the library.
+    """
+    from src.research_integrity.factors import momentum
+
+    lookback, skip = 60, 5
+    closes = list(prices[:200])
+    expected = momentum(closes, lookback=lookback, skip=skip)[-1]
+    direct = closes[-1 - skip] / closes[-1 - lookback] - 1.0
+    assert direct == pytest.approx(expected, rel=1e-12)
+
+
+def test_the_fee_is_charged_at_the_price_the_order_filled_at(liquid):
+    """It was priced off the static spec.price, so on a series drifting from 100
+    to 250 a fill at 250 was billed on a notional of 100 x 100 — about 60% of
+    the true cost, and the understatement grows with every trending backtest."""
+    model = AlmgrenFeeModel(liquid)
+    cheap = model.get_commission(order=None, fill_qty=10_000, fill_px=50.0,
+                                 instrument=None)
+    dear = model.get_commission(order=None, fill_qty=10_000, fill_px=250.0,
+                                instrument=None)
+    assert dear.as_double() > cheap.as_double()
+    assert model.charges[0]["price"] == 50.0
+    assert model.charges[1]["price"] == 250.0
+
+
+def test_the_fee_falls_back_to_the_spec_price_when_no_fill_price_is_given(liquid):
+    model = AlmgrenFeeModel(liquid)
+    model.get_commission(order=None, fill_qty=1_000, fill_px=None, instrument=None)
+    assert model.charges[0]["price"] == liquid.price

@@ -69,7 +69,7 @@ Added here, because the engine has no opinion about them:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Sequence
 
@@ -114,11 +114,12 @@ class LookAheadAudit:
                                  not exceed the bar it is handling. Catches data
                                  delivered early.
 
-      NOTHING EXTRA IS VISIBLE   the count of bars it can see must equal the
-                                 count it has been handed. Catches a cache
+      NOTHING EXTRA IS VISIBLE   the count of bars it can see must not EXCEED
+                                 the count it has been handed. Catches a cache
                                  pre-loaded with history that was never sent
                                  through the bus — the same contamination
-                                 arriving by a different route.
+                                 arriving by a different route. Fewer is legal:
+                                 nautilus caps the cache at `bar_capacity`.
 
     Kept as a record rather than raising on the spot so a failing run can be
     inspected: `violations` names every bar that was wrong, not just the first.
@@ -135,10 +136,17 @@ class LookAheadAudit:
                 "current_ts": current_ts, "max_visible_ts": max_visible_ts,
                 "ahead_by_ns": max_visible_ts - current_ts,
             })
-        if visible_count != bar_index + 1:
+        # MORE than were delivered, not merely different. Nautilus keeps bars in
+        # a deque(maxlen=bar_capacity), default 10,000, so a long run legitimately
+        # sees FEWER than it was sent — an equality check turned every bar past
+        # the cap into a spurious violation and aborted clean runs of more than
+        # 10,000 bars (40 years of daily data). The property worth having is that
+        # nothing EXTRA is visible: a cache pre-loaded with history that never
+        # came through the bus still has more than was delivered.
+        if visible_count > bar_index + 1:
             self.violations.append({
-                "bar_index": bar_index, "reason": "unexpected bar count",
-                "visible_count": visible_count, "expected": bar_index + 1,
+                "bar_index": bar_index, "reason": "more bars visible than delivered",
+                "visible_count": visible_count, "delivered": bar_index + 1,
             })
 
     @property
@@ -185,11 +193,24 @@ class AlmgrenFeeModel(FeeModel):
         self.charges: list[dict[str, float]] = []
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
+        # Priced at the price it ACTUALLY filled at. Using the static
+        # `spec.price` charged every fill at a fixed reference: on a series
+        # drifting from 100 to 250, a 100-share fill at 250 was billed on a
+        # notional of 100 x 100, about 60% of the true cost — and the
+        # understatement grows with every trending backtest, which is the
+        # direction that flatters the strategy.
         shares = abs(float(fill_qty))
-        cost = execution_cost(shares, self.spec)
-        self.charges.append({"shares": shares, "total": cost["total"],
+        spec = self.spec
+        if fill_px is not None:
+            price = abs(float(fill_px))
+            if price > 0:
+                spec = replace(self.spec, price=price)
+        cost = execution_cost(shares, spec)
+        self.charges.append({"shares": shares, "price": spec.price,
+                             "total": cost["total"],
                              "total_bps": cost["total_bps"]})
-        return Money(cost["total"], USD)
+        currency = getattr(instrument, "quote_currency", None) or USD
+        return Money(cost["total"], currency)
 
 
 # --- data -------------------------------------------------------------------
@@ -292,8 +313,13 @@ class MomentumStrategy(Strategy):
             self.signals.append(float("nan"))
             return
 
-        signal = momentum(self.closes, lookback=self.config.lookback,
-                          skip=self.config.skip)[-1]
+        # The last value only. Calling momentum() over the whole history on
+        # every bar and discarding all but [-1] made the strategy O(n^2): about
+        # 50M pure-Python iterations on a 10,000-bar run, all of it repeating
+        # work done on the previous bar. The definition is checked against the
+        # array implementation in tests/test_backtest.py.
+        signal = (self.closes[-1 - self.config.skip]
+                  / self.closes[-1 - self.config.lookback] - 1.0)
         self.signals.append(float(signal))
 
         long_now = self.portfolio.is_net_long(self.instrument.id)
@@ -323,10 +349,14 @@ def per_period_sharpe(equity: Sequence[float]) -> float:
     this. De-annualisation is the caller's business and is not done silently.
     """
     arr = np.asarray(equity, dtype=float)
-    arr = arr[np.isfinite(arr)]
     if arr.size < 3:
         return 0.0
-    returns = np.diff(arr) / arr[:-1]
+    # Difference FIRST, then drop non-finite returns. Filtering the equity curve
+    # beforehand spliced non-adjacent points together and invented a return
+    # across the gap — a jump from before an outage to after it, counted as one
+    # period's performance.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        returns = np.diff(arr) / arr[:-1]
     returns = returns[np.isfinite(returns)]
     if returns.size < 2:
         return 0.0
