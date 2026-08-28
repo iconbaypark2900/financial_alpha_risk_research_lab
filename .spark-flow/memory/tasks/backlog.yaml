@@ -1,38 +1,76 @@
 version: 1
+# Rewritten 2026-08-28. The previous contents were template output from the
+# project generator whose scaffolding commit 6eb543f removed: it ranked "add
+# retrieval quality checks" and "prototype semantic retrieval behind the
+# baseline" for a repository that has no retrieval, no index and no UI. Its
+# stated purpose is to make recommendations evidence-based rather than
+# chat-history-based, and it was the single most authoritative-looking wrong
+# document in the tree. Only "resolve dirty working tree" was correct, and that
+# is now done.
+#
+# State at rewrite: V0 feature-complete, 249 tests passing, Alpha exit criteria
+# met. Everything below is scoped against PRD 04 rather than against a template.
 tasks:
   - id: recommended
-    label: "Stabilize the deterministic baseline"
+    label: "Settle the MLflow-vs-SQLite divergence for the experiment log"
     kind: recommended
     score: 18
-    agents: ["codex", "testing-hardening", "spark-flow-review"]
-    why: "Keeps the project shippable before adding retrieval or UI complexity."
-  - id: near-cleanup
-    label: "Resolve dirty working tree context"
-    kind: near
-    score: 14
-    agents: ["codex", "spark-flow-closeout"]
-    why: "Uncommitted state is evidence that the next agent needs a clear checkpoint before larger changes."
+    agents: ["codex", "spark-flow-review"]
+    why: >
+      PRD 04 names MLflow. run_record.py implements FR-22 through FR-25 over
+      SQLite instead, with triggers rather than conventions and a replay() that
+      actually re-executes and compares hashes. It is arguably the better
+      artefact, but right now it is a SILENT divergence from the spec — which is
+      the one thing this codebase refuses to tolerate anywhere else. Cheap to
+      settle either way; the cost is only that it stays unsettled.
+
   - id: near-1
-    label: "Improve project memory and task context"
+    label: "Get PRD 04 into the repository, or a durable pointer to it"
     kind: near
-    score: 13
-    agents: ["codex", "spark-flow-planning"]
-    why: "Makes future agent recommendations evidence-based instead of chat-history based."
+    score: 16
+    agents: ["codex"]
+    why: >
+      Every requirement in this codebase traces to prd_04_financial_alpha_
+      research_lab.md, and the document is not in the tree and not reachable
+      from it. The README link used to resolve two directories above the
+      repository root and had never worked from a clone. Each module quotes the
+      FRs it implements, so the code is readable without it, but nobody can
+      check a quotation against a source they cannot open.
+
   - id: near-2
-    label: "Add retrieval quality checks"
+    label: "Close FR-19's partial-fill half with order-book data"
     kind: near
     score: 12
-    agents: ["codex", "synthetic-data-designer", "testing-hardening"]
-    why: "Turns search behavior into a measurable contract before changing retrieval strategy."
-  - id: near-3
-    label: "Package the CLI workflow"
-    kind: near
-    score: 10
     agents: ["codex", "testing-hardening"]
-    why: "Makes the project easier to run and verify from a clean checkout."
+    why: >
+      The only V0 requirement still open. Market orders against daily bars fill
+      in full even at 100x the bar's volume, because a bar carries no depth to
+      consume; partial fills need L2/L3 data this project does not have. Likely
+      a procurement question before it is an engineering one.
+      tests/test_backtest.py pins the limitation and will fail once it changes.
+
+  - id: near-3
+    label: "Pass the Beta gate (financial-alpha-beta-gate-001)"
+    kind: near
+    score: 11
+    agents: ["spark-flow-closeout"]
+    why: >
+      All three Alpha exit criteria in PROJECT_PHASE.md are now met. The gate
+      task was queued in the L5 flywheel section of the liaison brief and has
+      been waiting on the criteria rather than on anything else.
+
   - id: expansive
-    label: "Prototype semantic retrieval behind the baseline"
+    label: "V1 — portfolio construction, starting by verifying finGuard's math"
     kind: expansive
-    score: 8
-    agents: ["codex", "synthetic-data-designer", "data_flywheel"]
-    why: "Adds a richer direction while staying tethered to the deterministic index and quality checks."
+    score: 9
+    agents: ["hermes", "codex", "testing-hardening"]
+    why: >
+      migration_inbox/finGuard/ holds Kelly, drawdown and a Monte Carlo
+      simulator with 23 passing tests, and README §5.5 places portfolio
+      construction in V1. Do NOT start from its todo.md: that file is
+      AI-generated self-assessment ("Excellent Scaffolding", "Perfect modular
+      architecture") which rates its own gaps as LOW and has no more standing
+      than the NautilusTrader docstring did. Start by checking the Kelly and
+      drawdown formulas against their sources, the way core.py was checked
+      against Bailey and Lopez de Prado — an invariant test constrains the shape
+      of an answer, never its correctness.
