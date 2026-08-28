@@ -52,6 +52,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+
+def _simple_returns(values: Sequence[float]) -> Any:
+    """Period-over-period simple returns. Imported lazily so the study module
+    carries no numpy requirement for callers that only preregister."""
+    import numpy as np
+
+    prices = np.asarray(values, dtype=float)
+    if np.any(prices <= 0):
+        raise StudyError("prices must be positive to form returns")
+    return np.diff(prices) / prices[:-1]
+
 ORDER = (
     "require_point_in_time",     # FR-07
     "assert_ordinary_access",    # FR-10
@@ -166,6 +177,47 @@ class Study:
                                         if k != "impact_charges"},
                         outcome="completed")
         return {**result, "run_id": run_id, "dataset_version": version}
+
+    # ---- reading through the store, so the range cannot be misdeclared ----
+    def series(self, entity_id: str, field: str = "close", *,
+               knowledge_date: str | None = None,
+               start: str | None = None, end: str | None = None
+               ) -> tuple[list[str], list[float]]:
+        """Prices as first reported, with the range a property of the result."""
+        self.store.require_point_in_time(self.dataset_id)
+        return self.store.series(self.dataset_id, entity_id, field,
+                                 start=start, end=end,
+                                 knowledge_date=knowledge_date)
+
+    def search_series(self, entity_id: str, param_sets: Sequence[dict], *,
+                      field: str = "close",
+                      knowledge_date: str | None = None,
+                      start: str | None = None, end: str | None = None,
+                      to_returns: Callable[[Sequence[float]], Any] | None = None,
+                      **kwargs) -> dict[str, Any]:
+        """Search over a series READ FROM THE STORE, not one handed in.
+
+        This is the version without the hole. `search` takes start and end as
+        arguments and checks them against the holdout, which a caller can defeat
+        by declaring a range it does not intend to read. Here the range is
+        DERIVED from the data actually returned, so the holdout check and the
+        data are the same fact.
+
+        A range that overlaps the holdout is refused after the read and before
+        anything is counted — reading is not backtesting, and refusing at the
+        point of use is what keeps the counter honest.
+        """
+        dates, values = self.series(entity_id, field,
+                                    knowledge_date=knowledge_date,
+                                    start=start, end=end)
+        if len(dates) < 2:
+            raise StudyError(
+                f"{entity_id}/{field} returned {len(dates)} observations for "
+                f"{self.dataset_id} — nothing to search over")
+
+        returns = to_returns(values) if to_returns else _simple_returns(values)
+        return self.search(returns, param_sets,
+                           start=dates[0], end=dates[-1], **kwargs)
 
     # ---- FR-11, FR-12: the holdout, which is not an ordinary backtest -----
     def preregister(self, *, strategy_family: str, hypothesis: str,

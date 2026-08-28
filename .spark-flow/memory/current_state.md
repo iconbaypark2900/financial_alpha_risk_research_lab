@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **406 tests pass** (`pytest -q`), 329 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **422 tests pass** (`pytest -q`), 329 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -62,6 +62,14 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   organised per-module cannot see that, because the gap is between the modules.
   `Study` invokes them in an order where the refusals precede the trial count,
   and a test now fails, by name, if any control is orphaned again.
+- **Real data now runs end to end** (2026-08-28, `ingest.py` +
+  `scripts/real_data_pipeline.py`). FRED SP500 for prices, ALFRED GDPC1 by
+  vintage for genuine as-first-reported semantics — two vintages four months
+  apart contain a real revision (22,672.859 -> 22,679.255) and a quarter the
+  earlier vintage could not contain. The result on the S&P 500: not one of
+  2,691 moving-average variants beat buy-and-hold, and the reshuffled series
+  scored higher than the real one. FR-03/04/05 are STILL not implemented —
+  index levels are a survivorship-adjusted composite, not a universe.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on

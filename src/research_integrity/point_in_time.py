@@ -322,6 +322,55 @@ class PointInTimeStore:
             first is not None and first["value"] != result["value"])
         return result
 
+    def series(self, dataset_id: str, entity_id: str, field: str, *,
+               start: str | date | None = None, end: str | date | None = None,
+               knowledge_date: str | date | None = None
+               ) -> tuple[list[str], list[float]]:
+        """A time series AS FIRST REPORTED, in effective-date order.
+
+        Returns (dates, values). The values are the FIRST reported figure for
+        each period among those known by `knowledge_date` — not the latest, and
+        not the best. Taking the last row of an ordered result instead selects
+        the highest knowledge date, which is the restatement; that bug shipped
+        in `factors.book_to_market_as_of` and is the reason this selection lives
+        in one place now rather than being written out at each call site.
+
+        This exists so a caller does not have to DECLARE the range it is
+        reading. `Study` used to take start and end as arguments and check them
+        against the holdout, which a caller could defeat by declaring a range it
+        did not intend to read. Reading through here, the range is a property of
+        the data returned.
+        """
+        self.require_point_in_time(dataset_id)
+        sql = ("SELECT effective_date, value, knowledge_date FROM facts "
+               "WHERE dataset_id = ? AND entity_id = ? AND field = ?")
+        args: list[Any] = [dataset_id, entity_id, field]
+        if knowledge_date is not None:
+            sql += " AND knowledge_date <= ?"
+            args.append(str(knowledge_date))
+        if start is not None:
+            sql += " AND effective_date >= ?"
+            args.append(str(start))
+        if end is not None:
+            sql += " AND effective_date <= ?"
+            args.append(str(end))
+        sql += " ORDER BY effective_date ASC, knowledge_date ASC"
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, args).fetchall()
+
+        dates: list[str] = []
+        values: list[float] = []
+        seen: set[str] = set()
+        for effective_date, value, _ in rows:
+            key = str(effective_date)
+            if key in seen:          # a restatement of a period already taken
+                continue
+            seen.add(key)
+            dates.append(key)
+            values.append(float(value))
+        return dates, values
+
     def restatements(self, dataset_id: str) -> list[dict[str, Any]]:
         """Every fact that revised an earlier one. Auditable by construction."""
         with self._connect() as conn:

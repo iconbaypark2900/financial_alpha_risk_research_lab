@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-406 tests pass, on every push. Two caveats the row labels are too small to hold:
+422 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 406 passed
+.venv/bin/python -m pytest -q                      # 422 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **329 of the 406 tests**; the point-in-time store and the engine
+alone and runs **329 of the 422 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -381,6 +381,71 @@ through adjacency even when the windows do not touch.
 There is no option to disable purging. FR-14 says naive k-fold must not be
 offered, and a flag would be exactly that with an extra step — the leaky path
 would become the one people take when the honest numbers disappoint.
+
+## Real data, end to end
+
+```bash
+python3 scripts/real_data_pipeline.py            # cached in data/
+python3 scripts/real_data_pipeline.py --fetch    # re-download
+```
+
+Every component here had only ever seen `standard_t` noise or hand-built
+fixtures. This runs the whole machine once on real market data.
+
+**The source has to satisfy one constraint the obvious ones do not.** FR-01
+needs data with a real *knowledge* date, distinct from the date the fact refers
+to. A price scraper gives you today's view of history and nothing else — you
+cannot ask it what was on the wire in February, so as-first-reported is
+unavailable and FR-02 can only be simulated. So:
+
+| source | what it gives |
+|---|---|
+| **FRED** `SP500` | 2,513 real daily closes; a close is known at the close, so effective and knowledge dates coincide honestly |
+| **ALFRED** `GDPC1` | the same series *by vintage* — what the number looked like on a given date, with the real publication lag |
+
+Two GDP vintages four months apart contain a genuine revision:
+
+```
+GDP 2023-10-01   first reported 22,672.859   (vintage 2024-02-15)
+                 restated to    22,679.255   (vintage 2024-06-15)
+2024-01-01       does not exist in the February vintage at all
+```
+
+A query as of June still returns **22,672.859** for that quarter — the figure
+that was on the wire — and the restatement is reachable only through
+`latest_including_restatements(acknowledge_contamination=True)`. That is FR-01
+and FR-02 demonstrated against a source rather than a fixture.
+
+### What the machine says about the S&P 500
+
+```
+                              REAL S&P 500      RESHUFFLED
+  --------------------------------------------------------
+  trials counted                     2,691           2,691
+  best excess Sharpe               -0.0064          0.0015
+  DEFLATED Sharpe                   0.1366          0.0542
+```
+
+The Sharpe is **excess over buy-and-hold**, which is what
+`moving_average_crossover` scores by default — the drift trap, found the first
+time this was run against real data. Buy-and-hold over the period is `+0.0468`.
+
+So: **not one of 2,691 moving-average variants beat simply holding the index**,
+and the reshuffled series — real returns with every temporal relationship
+destroyed — scored *higher* than the real one. Deflated Sharpe 0.1366. Noise.
+
+A sweep whose range reached into the protected holdout was refused before
+anything was counted, and the run was recorded with the code SHA that produced
+it.
+
+### What real data did not fix
+
+**FR-03, FR-04 and FR-05 are still not implemented**, and index levels do not
+help: an index has its constituent changes baked in, so this is a
+survivorship-adjusted composite, not a survivorship-free universe. Anyone
+reaching for a cross-section still needs vendor data nobody here has. The
+temptation is to treat "we have real data now" as having closed those
+requirements. It has not, and `docs/REQUIREMENTS.md` still says so.
 
 ## The seam: making the controls binding
 
