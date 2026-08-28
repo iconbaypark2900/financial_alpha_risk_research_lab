@@ -32,7 +32,7 @@ staged in `migration_inbox/`, not a current integration target.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest -q
-# Expected: 192 tests passing
+# Expected: 248 tests passing
 
 .venv/bin/python scripts/null_benchmark_demo.py
 # Acceptance criteria 4 and 5. Deterministic; seeds are fixed in the script.
@@ -60,7 +60,7 @@ PYTHONPATH=migration_inbox/finGuard/src .venv/bin/python -m pytest migration_inb
 |-------|-------|
 | Profile | `python` |
 | Smoke command | `.venv/bin/python -m pytest -q` |
-| Note | `pip install numpy duckdb pytest` is sufficient. `nautilus_trader` is pinned but not yet imported. |
+| Note | `pip install numpy duckdb pytest nautilus_trader` — the engine slice needs the last one; its tests skip without it. |
 
 ```bash
 cd ~/dataScience/financial_alpha_risk_research_lab
@@ -88,7 +88,8 @@ Pattern: `python-cli`
 | finGuard merge scope creep | L1 proof closed (`finguard-proof-001`); merge scoped to L4 |
 | Missing pyproject.toml | python profile runs but uses system pytest; venv activation required |
 | Documentation drifting from the code | `tests/test_readme_is_true.py` recomputes every numeric table in the README and fails when the page and the code disagree. Four tables were stale for six commits before it existed. |
-| NautilusTrader named as the engine but not imported | FR-19 and FR-21 are unmet, not delegated. Stated as such in the README and in `execution_costs.py`; a test prevents the claim returning without the import. |
+| NautilusTrader named as the engine but not imported | RESOLVED 2026-08-28 — wired in `backtest.py`. FR-21 met and audited per bar; FR-19 partially met (no partial fills without book data). A test now guards against overclaiming in either direction. |
+| FR-19 incomplete: no order-book data | Market orders against daily bars fill in full, so partial fills are not modelled. Pinned by a test that fails if that ever changes. Closing it needs L2/L3 data this project does not have. |
 
 ---
 

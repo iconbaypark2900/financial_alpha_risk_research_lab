@@ -35,25 +35,26 @@ capability: the controls must exist before the thing they constrain.
 | Execution costs, borrow, capacity in the primary result | built | `execution_costs.py` |
 | Run reproducibility — data version, code SHA, parameters, seeds, environment | built | `run_record.py` |
 | Experiment log — queryable across runs | built, **not MLflow** | `run_record.py` |
-| Backtest engine — NautilusTrader, partial fills, latency | **dependency only, not wired** | — |
-| Factor library — small, each factor unit-tested against known values | **not started** | — |
+| Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
+| Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-192 tests pass. Two caveats the row labels are too small to hold:
+248 tests pass. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow.** The PRD names MLflow; what is
   built satisfies FR-22 through FR-25 with the same triggers-not-conventions
   approach as the rest of the module. That is a deliberate substitution and it
   should be either ratified or reversed, not left as a silent divergence.
-- **NautilusTrader is installed and pinned, and nothing imports it.** So FR-19
-  (partial fills, latency) and FR-21 (structural absence of look-ahead) are
-  currently **unmet**, not delegated. See the note under execution costs below.
+- **FR-19 is only partially met.** The engine is wired and FR-21 holds and is
+  audited, but *partial fills* need order-book depth this project does not have.
+  Latency and slippage are demonstrated; partial fills are not. See the engine
+  section below — the limitation is pinned by a test, not left to be found.
 
 ## Running it
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest -q                      # 192 passed
+.venv/bin/python -m pytest -q                      # 248 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -243,22 +244,116 @@ There is no option to disable purging. FR-14 says naive k-fold must not be
 offered, and a flag would be exactly that with an extra step — the leaky path
 would become the one people take when the honest numbers disappoint.
 
+## Point-in-time data store (FR-01, FR-02, FR-06, FR-07)
+
+Two time axes, kept separately, because collapsing them is how look-ahead gets
+in: `effective_date` is when a fact was true, `knowledge_date` is when anyone
+learned it. A fiscal quarter ends on 31 December and the filing lands in
+mid-February; a query as of 15 January must not see it.
+
+```python
+from src.research_integrity import PointInTimeStore
+
+store = PointInTimeStore("research.duckdb")
+store.register_dataset("fundamentals", point_in_time=True)
+store.append_facts("fundamentals", [
+    {"entity_id": "ACME", "field": "book_equity", "value": 500.0,
+     "effective_date": "2023-12-31", "knowledge_date": "2024-02-15"},
+])
+
+store.as_of("fundamentals", "2024-01-15")          # [] — not published yet
+store.latest_including_restatements(...)           # LookAheadContamination
+```
+
+`register_dataset` requires `point_in_time` explicitly rather than defaulting
+it, and a dataset declared not point-in-time must carry a note saying what is
+missing — otherwise the limitation is invisible at exactly the moment someone is
+refused. FR-07 says refuse rather than warn, and `require_point_in_time` does;
+a warning is read once and then filtered out of the logs.
+
+**On the PRD's claim that Iceberg supplies this.** For FR-06 it does — immutable
+addressable versions are what a table format is for. For FR-01 it does not:
+table time travel answers "what did this table look like at snapshot N", which
+equals knowledge time only if you never backfill, never load history and never
+correct a load. Iceberg belongs *under* this module as storage, not instead of it.
+See the module docstring for the full argument.
+
+FR-03 (delisted securities), FR-04 (index membership) and FR-05 (corporate
+actions) are data-*content* requirements. The schema carries them as ordinary
+facts with effective dates, but nobody has loaded the vendor data, and calling
+the store survivorship-free because it *could* hold delisted names would be a
+claim about data that is not there.
+
+## Factor library
+
+Small on purpose. The PRD asks for a handful of factors each *known* to be
+right, not a catalogue of hundreds each of which is plausible — a wrong factor
+does not announce itself, it produces a backtest.
+
+```python
+from src.research_integrity import assert_causal, momentum, FACTORS
+
+signal = momentum(prices)                  # 12-1: t-252 to t-21, month skipped
+assert_causal(momentum, prices, split=350) # LookAheadFactor if it peeks
+FACTORS["volatility"].direction            # 'NEGATIVE — low-volatility ...'
+```
+
+| factor | definition | premium direction |
+|---|---|---|
+| `momentum` | return from t-252 to t-21 | positive |
+| `reversal` | negative of the trailing 1-month return | positive |
+| `volatility` | annualised sd of trailing log returns, ddof=1 | **negative** |
+| `size` | log market capitalisation | **negative** |
+| `book_to_market` | as-reported book equity known at the date / market cap | positive |
+
+Sign conventions are recorded in `FACTORS[name].direction` rather than absorbed
+into the functions. Negating inside a factor so that "high is good" everywhere
+is convenient exactly once, and then someone compares two factors whose
+conventions differ and cannot work out why the spread inverted.
+
+### The causality check is the point
+
+`assert_causal` perturbs the data after time *t*, recomputes, and requires every
+value at or before *t* to be unchanged. It works on any callable, including one
+this library did not write, and it needs no cooperation from the factor being
+tested — the same move `assert_no_leakage` makes for CV splits.
+
+| what it is given | result |
+|---|---|
+| a correct factor | passes |
+| a window reading `prices[t+1]` | `LookAheadFactor` at the first moved index |
+| a factor centred on `nanmean` of the whole series | `LookAheadFactor` |
+| a comparison whose head is entirely NaN | `FactorError` — refuses to pass vacuously |
+
+That last row was a real bug in this function. At the default midpoint split,
+momentum's 252-period warm-up leaves the whole head NaN; NaN compares equal to
+NaN, so the check passed without comparing anything — including for a factor
+that openly read the future. It now refuses. A check that cannot fail is worse
+than no check, because it is recorded as a pass.
+
+### Fundamentals are read through the store, never joined on the period end
+
+`book_to_market_as_of` takes a **knowledge** date and reads `store.as_of`, so
+during the reporting lag it returns `None`. That is the honest answer: the
+factor is genuinely undefined before the filing exists. Joining book equity to
+prices on the fiscal period end date instead hands the strategy six weeks of
+knowledge it did not have, and the resulting value factor works beautifully —
+which is the problem. A restatement published in March does not reach back into
+February either, because `as_of` returns as-first-reported values (FR-02).
+
 ## Execution costs and capacity (FR-17, FR-18, FR-20)
 
 **The engine is to be NautilusTrader** (1.231.0, pinned and installed), as the
 PRD specifies, and reimplementing an event-driven matching engine by hand when
 the spec names one would repeat the Mitiq mistake made earlier in this project.
 
-**It is not wired in yet, and nothing here imports it.** That matters more than
-it sounds: FR-19 (partial fills, latency) and FR-21 (look-ahead structurally
-impossible, because data arrives as timestamped messages rather than being
-indexable) are therefore **unmet**, not delegated. An earlier version of this
-paragraph said the library "supplies" both — but a dependency nothing calls
-supplies nothing, and the sentence was the only thing in the repository
-asserting otherwise. `tests/test_readme_is_true.py` now fails if that claim
-reappears while no module imports the package.
+It is now wired — see [the engine section](#the-backtest-engine-fr-19-fr-21).
+An earlier version of this paragraph said the library "supplies" FR-19 and FR-21
+while nothing in the repository imported it; a dependency nothing calls supplies
+nothing. `tests/test_readme_is_true.py` fails if that claim reappears without
+the import, and now also fails if the prose overshoots the other way.
 
-What NautilusTrader would not supply even once wired, and is built here:
+What NautilusTrader does not supply even now that it is wired, and is built here:
 
 ```python
 from src.research_integrity import Instrument, capacity, execution_cost
@@ -290,6 +385,104 @@ strategy. There is a test that fails if β is set to 0.5.
 **Borrow is a constraint, not a price** (FR-18): an unborrowable short raises
 rather than costing more. Charging a higher fee for shares that do not exist to
 lend produces a backtest of a strategy nobody could have run.
+
+## The backtest engine (FR-19, FR-21)
+
+```python
+from src.research_integrity import run_backtest, Instrument, TrialCounter
+
+result = run_backtest(prices, cost_spec=Instrument("ACME", price=100.0,
+                                                   adv=1_000_000,
+                                                   daily_volatility=0.02,
+                                                   shares_outstanding=100_000_000),
+                      counter=TrialCounter("research.db"), dataset_id="sp500")
+
+result["look_ahead"]    # {'bars_audited': 400, 'clean': True, 'violations': []}
+result["sharpe"]        # per-period, the unit core.py requires
+```
+
+NautilusTrader runs the matching engine, order lifecycle, account and clock.
+Nothing here reimplements any of that.
+
+### Why event-driven actually buys FR-21
+
+The usual defence against look-ahead is discipline — index carefully, shift the
+right way, review the code. It fails silently, and the failure is the rewarding
+kind: a leaky backtest looks like a good one.
+
+An event-driven engine removes the opportunity rather than the temptation. Data
+arrives as timestamped messages in time order, so there is no array to index off
+the end of; at the moment `on_bar` runs, the later bars have not been sent.
+
+**But "cannot" is a claim about an implementation, and this project does not take
+those on trust** — the deflated Sharpe formula was wrong for four commits while
+every invariant test passed. So `LookAheadAudit` checks it on every bar of every
+run:
+
+| property | catches |
+|---|---|
+| nothing visible postdates the current bar | data delivered early |
+| visible bar count equals bars delivered | a cache pre-loaded with history that never came through the bus |
+
+A strategy that puts a bar from 120 days ahead into the cache — doing by hand
+what an array-indexing backtest does by accident — is caught on the very next
+bar, with all 239 subsequent violations recorded. There is a test for that,
+because an audit that has never failed is a decoration.
+
+### FR-19, at the precision the evidence supports
+
+| | status |
+|---|---|
+| latency | **met** — five days of latency moves fills from 33 to 62 and equity by $4,204 |
+| slippage | **met** — `prob_slippage=1.0` changes final equity |
+| partial fills | **NOT met** — needs order-book depth |
+
+Market orders against daily bars fill in full even at 100x the bar's volume and
+with `liquidity_consumption=True`, because a bar carries no depth to consume.
+This project has no book data, so that half of FR-19 is not demonstrated.
+
+It would have been easy to book FR-19 as met: NautilusTrader models partial
+fills, so the claim would read as true and nobody would check whether this
+project ever invokes it. That is precisely how the previous overclaim happened,
+so the limitation gets a test that fails if partial fills ever start occurring —
+telling whoever added book data that the docs can now be strengthened.
+
+### Impact goes in where the engine charges commission
+
+`AlmgrenFeeModel` plugs the participation-rate model from `execution_costs.py`
+into the engine as a `FeeModel`. Nautilus's own `FillModel` slips a fill by a
+**tick** with some probability — microstructure noise, not impact. It does not
+grow with order size relative to volume, so without this a 100,000-share order
+costs the same in a name trading 10m a day as in one trading 100k. The second is
+a whole day's volume; the first is a rounding error. That is the error FR-17
+exists to correct.
+
+The size at which it matters is worth stating: at 100 shares the liquid and thin
+names differ by 7%, not 13x, because 100 shares moves nothing anywhere and the
+spread dominates. The model is behaving correctly; the comparison only becomes
+interesting at sizes that are a real fraction of a day.
+
+### Every run is counted, including the ones that fail
+
+The trial is registered with the `TrialCounter` **before** the engine starts, so
+a backtest that crashes is counted anyway. FR-08 asks for runs "whose results
+were discarded", and the crash is the purest case. A run whose look-ahead audit
+fails is counted as a trial but records **no outcome** — it happened, and its
+number is inadmissible.
+
+### How this composes with the factor library
+
+Two guarantees that only mean something together:
+
+| check | guarantees |
+|---|---|
+| `assert_causal` (`factors.py`) | the factor does not read forward **within** the array it is given |
+| `LookAheadAudit` (`backtest.py`) | the array it is given never **contains** the future |
+
+Either alone is insufficient — a perfectly causal factor over a contaminated
+history is contaminated, and an honest history fed to a peeking factor is
+leaked. `MomentumStrategy` computes its signal by calling `momentum` on exactly
+the closes that have arrived, so both apply to the same number.
 
 ## Reproducibility (FR-22, FR-23, FR-24, FR-25)
 

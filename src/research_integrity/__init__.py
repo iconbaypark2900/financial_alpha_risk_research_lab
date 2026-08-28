@@ -1,15 +1,40 @@
-"""Research integrity: deflation and minimum backtest length (PRD 04 FR-09, FR-13).
+"""Research integrity — the V0 controls, and the search they exist to constrain.
 
-Both formulas are implemented as published and verified against their source
-papers' worked examples. See core.py for the provenance note — the first
+    core.py              deflated Sharpe, minimum backtest length (FR-09, FR-13)
+    trial_counter.py     every trial, counted, append-only  (FR-08, FR-15)
+    holdout.py           protected holdout and pre-registration (FR-10..FR-12)
+    cross_validation.py  purged, embargoed splits (FR-14)
+    point_in_time.py     as-of and as-reported queries (FR-01, FR-02, FR-06, FR-07)
+    factors.py           a small factor library, each one causality-checked
+    backtest.py          the NautilusTrader engine, audited (FR-19, FR-21)
+    execution_costs.py   impact, borrow, capacity (FR-17, FR-18, FR-20)
+    run_record.py        enforced reproducibility (FR-22..FR-25)
+    search.py            the trial harness and null benchmark (FR-16)
+
+The formulas in core.py are implemented as published and verified against their
+source papers' worked examples. See that module's provenance note — the first
 version invented approximations the papers do not contain, and every invariant
-test passed while it did.
+test passed while it did. That is the recurring lesson here: an invariant test
+constrains the shape of an answer, never its correctness, so anything with a
+published source is checked against the source.
 """
 from .cross_validation import (
     LeakageError,
     PurgedKFold,
     assert_no_leakage,
     leakage_report,
+)
+from .factors import (
+    FACTORS,
+    Factor,
+    FactorError,
+    LookAheadFactor,
+    assert_causal,
+    book_to_market_as_of,
+    momentum,
+    realised_volatility,
+    reversal,
+    size,
 )
 from .execution_costs import (
     BorrowUnavailable,
@@ -34,6 +59,18 @@ try:  # duckdb is optional; the rest of the module does not need it
     )
 except ImportError:  # pragma: no cover
     PointInTimeStore = None  # type: ignore[assignment]
+try:  # nautilus_trader is heavy and optional; the controls do not need it
+    from .backtest import (
+        AlmgrenFeeModel,
+        LookAheadAudit,
+        LookAheadDetected,
+        MomentumStrategy,
+        bars_from_prices,
+        per_period_sharpe,
+        run_backtest,
+    )
+except ImportError:  # pragma: no cover
+    run_backtest = None  # type: ignore[assignment]
 from .search import (
     compare_to_null,
     crossover_grid,
@@ -52,6 +89,23 @@ from .core import (
 )
 
 __all__ = [
+    "AlmgrenFeeModel",
+    "LookAheadAudit",
+    "LookAheadDetected",
+    "MomentumStrategy",
+    "bars_from_prices",
+    "per_period_sharpe",
+    "run_backtest",
+    "FACTORS",
+    "Factor",
+    "FactorError",
+    "LookAheadFactor",
+    "assert_causal",
+    "book_to_market_as_of",
+    "momentum",
+    "realised_volatility",
+    "reversal",
+    "size",
     "BorrowUnavailable",
     "ExperimentLog",
     "HoldoutViolation",

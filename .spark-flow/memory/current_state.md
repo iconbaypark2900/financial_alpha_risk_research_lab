@@ -18,10 +18,21 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **192 tests pass** (`.venv/bin/python -m pytest -q`).
-- Outstanding V0 work: the **factor library** (not started), and **wiring
-  NautilusTrader** — it is pinned and installed but imported by nothing, so
-  FR-19 and FR-21 are unmet rather than delegated.
+- **248 tests pass** (`.venv/bin/python -m pytest -q`).
+- **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
+  2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
+  PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
+  they need order-book depth this project has no data for, and the limitation is
+  pinned by a test rather than left to be discovered.
+- Outstanding, in rough priority order: order-book data to close FR-19; the
+  MLflow-vs-SQLite decision below; then V1 (portfolio construction, the finGuard
+  material in `migration_inbox/`).
+- The factor library landed 2026-08-28: `factors.py`, five factors, each tested
+  against hand-derived values, plus `assert_causal` — a mechanical look-ahead
+  check that perturbs the future and requires the past not to move. It composes
+  with the engine's `LookAheadAudit`: the first guarantees the factor does not
+  read forward within its array, the second that the array never contains the
+  future.
 - The experiment log is SQLite, not the MLflow the PRD names. Deliberate; owed a
   ratify-or-reverse decision.
 

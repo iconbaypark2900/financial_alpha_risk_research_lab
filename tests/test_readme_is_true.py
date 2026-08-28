@@ -126,6 +126,32 @@ def test_the_cost_and_capacity_table_matches_the_code(readme):
             f"| ${small_cap / 1e6:,.0f}m |") in readme
 
 
+def test_the_engine_sections_numbers_match_the_code(readme):
+    """The engine section quotes concrete figures, so they get the same
+    treatment as every other table on the page.
+
+    Skipped rather than failed when nautilus_trader is absent: the claim is
+    about what the engine does, and with no engine there is nothing to check.
+    """
+    pytest.importorskip("nautilus_trader")
+    from nautilus_trader.backtest.models import LatencyModel
+
+    from src.research_integrity.backtest import run_backtest
+
+    day_ns = 86_400_000_000_000
+    rng = np.random.default_rng(0)
+    prices = 100 * np.exp(np.cumsum(rng.normal(0.0003, 0.01, 400)))
+
+    base = run_backtest(prices)
+    delayed = run_backtest(prices,
+                           latency_model=LatencyModel(base_latency_nanos=5 * day_ns))
+    drop = base["final_equity"] - delayed["final_equity"]
+
+    assert (f"moves fills from {base['n_fills']} to {delayed['n_fills']} "
+            f"and equity by ${drop:,.0f}") in readme, (
+        "the engine section's latency figures no longer match the code")
+
+
 def test_the_readme_does_not_claim_nautilus_supplies_what_nothing_imports():
     """The claim that cost me the most to verify, kept as a test.
 
@@ -138,17 +164,32 @@ def test_the_readme_does_not_claim_nautilus_supplies_what_nothing_imports():
     from a quotation of the claim it replaced, which is exactly how the first
     version of this test failed: on the sentence explaining the correction.
 
-    If the wiring lands, this test is what tells you the prose may be made
-    stronger."""
+    The wiring has since landed (backtest.py), so the test now runs in the
+    other direction: the prose must no longer say "unmet", and must still admit
+    the half of FR-19 that is not demonstrated. A correction that overshoots
+    into a fresh overclaim is the same defect wearing the opposite sign."""
     import importlib.util
+    import re
 
     source = (Path(__file__).resolve().parent.parent / "src" / "research_integrity")
-    imports_it = any("import nautilus_trader" in path.read_text(encoding="utf-8")
+    # Both spellings. The first version of this check looked for the literal
+    # "import nautilus_trader" and so did not see `from nautilus_trader.x import
+    # y` — it reported the package as unimported on the very commit that wired
+    # it in. A detector that cannot see the thing it guards is worse than none.
+    imports = re.compile(r"^\s*(?:from|import)\s+nautilus_trader\b", re.MULTILINE)
+    imports_it = any(imports.search(path.read_text(encoding="utf-8"))
                      for path in source.glob("*.py"))
     installed = importlib.util.find_spec("nautilus_trader") is not None
 
-    if not imports_it:
-        text = (source / "execution_costs.py").read_text(encoding="utf-8")
+    text = (source / "execution_costs.py").read_text(encoding="utf-8")
+    if imports_it:
+        assert "are currently UNMET" not in text, (
+            "nautilus_trader is now imported and wired (see backtest.py), so "
+            "execution_costs.py must stop saying FR-19 and FR-21 are unmet.")
+        assert "PARTIALLY met" in text, (
+            "FR-19's partial-fill half is not demonstrated — market orders "
+            "against daily bars fill in full. Say so, or prove otherwise.")
+    else:
         assert "are currently UNMET" in text, (
             "No module imports nautilus_trader, so FR-19 and FR-21 are unmet. "
             "execution_costs.py must say so. Wire the engine in, or restore the "

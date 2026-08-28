@@ -23,10 +23,11 @@ numpy>=1.21.0
 # point_in_time.py, which degrades gracefully if it is absent.
 duckdb>=1.0.0
 
-# The backtest and execution engine the PRD names. Pinned and installed, and
-# NOT YET IMPORTED by anything here — so FR-19 and FR-21 are unmet rather than
-# delegated. It stays in this file because the decision to use it is made and
-# the wiring is the outstanding work; see src/research_integrity/execution_costs.py.
+# The backtest and execution engine the PRD names. Pinned, installed AND WIRED —
+# src/research_integrity/backtest.py runs it. FR-21 is met and audited on every
+# bar; FR-19 is partially met (latency and slippage yes, partial fills no — they
+# need order-book depth this project has no data for). This is now a hard
+# dependency of the engine slice; the controls still import without it.
 nautilus_trader>=1.231.0
 
 # --- test-only -------------------------------------------------------------
