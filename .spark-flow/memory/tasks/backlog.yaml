@@ -12,30 +12,25 @@ version: 1
 # met. Everything below is scoped against PRD 04 rather than against a template.
 tasks:
   - id: recommended
-    label: "Settle the MLflow-vs-SQLite divergence for the experiment log"
+    label: "V1 — portfolio construction, starting by verifying finGuard's math"
     kind: recommended
-    score: 18
-    agents: ["codex", "spark-flow-review"]
+    score: 15
+    agents: ["hermes", "codex", "testing-hardening"]
     why: >
-      PRD 04 names MLflow. run_record.py implements FR-22 through FR-25 over
-      SQLite instead, with triggers rather than conventions and a replay() that
-      actually re-executes and compares hashes. It is arguably the better
-      artefact, but right now it is a SILENT divergence from the spec — which is
-      the one thing this codebase refuses to tolerate anywhere else. Cheap to
-      settle either way; the cost is only that it stays unsettled.
-
-  - id: near-1
-    label: "Get PRD 04 into the repository, or a durable pointer to it"
-    kind: near
-    score: 16
-    agents: ["codex"]
-    why: >
-      Every requirement in this codebase traces to prd_04_financial_alpha_
-      research_lab.md, and the document is not in the tree and not reachable
-      from it. The README link used to resolve two directories above the
-      repository root and had never worked from a clone. Each module quotes the
-      FRs it implements, so the code is readable without it, but nobody can
-      check a quotation against a source they cannot open.
+      The next buildable phase. FR-19 is data-gated, so this is what is actually
+      unblocked. migration_inbox/finGuard/ holds Kelly, drawdown, a Monte Carlo
+      simulator and a Plotly visualiser. The "23 tests green" in the liaison
+      brief is true and misleading: those tests cover kelly.py and drawdown.py
+      (302 lines); simulator.py (231 lines) is untested, and visualizer.py (426
+      lines) is untested AND does not import — it needs plotly, which is not a
+      dependency here. Two thirds of the code is unverified.
+      Do NOT start from finGuard's todo.md: it is AI-generated self-assessment
+      ("Excellent Scaffolding", "Perfect modular architecture") rating its own
+      gaps as LOW, with exactly the standing the NautilusTrader docstring had.
+      Start by checking Kelly and drawdown against their sources the way core.py
+      was checked against Bailey and Lopez de Prado. Drop visualizer.py and
+      app.py rather than migrating them: a Streamlit UI is not portfolio
+      construction, and the README declines UI work for an internal tool.
 
   - id: near-2
     label: "Close FR-19's partial-fill half with order-book data"
@@ -58,19 +53,3 @@ tasks:
       All three Alpha exit criteria in PROJECT_PHASE.md are now met. The gate
       task was queued in the L5 flywheel section of the liaison brief and has
       been waiting on the criteria rather than on anything else.
-
-  - id: expansive
-    label: "V1 — portfolio construction, starting by verifying finGuard's math"
-    kind: expansive
-    score: 9
-    agents: ["hermes", "codex", "testing-hardening"]
-    why: >
-      migration_inbox/finGuard/ holds Kelly, drawdown and a Monte Carlo
-      simulator with 23 passing tests, and README §5.5 places portfolio
-      construction in V1. Do NOT start from its todo.md: that file is
-      AI-generated self-assessment ("Excellent Scaffolding", "Perfect modular
-      architecture") which rates its own gaps as LOW and has no more standing
-      than the NautilusTrader docstring did. Start by checking the Kelly and
-      drawdown formulas against their sources, the way core.py was checked
-      against Bailey and Lopez de Prado — an invariant test constrains the shape
-      of an answer, never its correctness.

@@ -10,6 +10,19 @@
     FR-25  The experiment log MUST be queryable across all runs by strategy,
            factor, date range, and outcome.
 
+NOT MLFLOW, DELIBERATELY (ratified 2026-08-28)
+
+PRD 04 names MLflow for the experiment log. This is SQLite instead, and the
+reason is FR-23 rather than preference: MLflow logs, and never checks whether a
+run reproduces. `replay()` below restores the seeds, re-executes, and compares a
+canonical hash against the one stored at the time, so a fully-populated record
+still fails when an unrecorded seed was consumed. Adopting MLflow would satisfy
+the letter of "use MLflow" by weakening the requirement it was named to serve.
+
+If the team wants MLflow's UI and artifact storage, the shape is an EXPORT from
+these tables — not moving the system of record into a store that cannot enforce
+FR-23. See .spark-flow/memory/decisions.md.
+
 WHAT MAKES THIS DIFFERENT FROM LOGGING
 
 A log records that something happened. A run record must be sufficient to make

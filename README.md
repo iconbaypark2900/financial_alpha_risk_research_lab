@@ -5,9 +5,16 @@ strategies — it is making the strategies it finds *believable*. The specificat
 is `prd_04_financial_alpha_research_lab.md`, which is **not in this repository**
 and is not reachable from it — the link that used to be here resolved two
 directories above the repository root and had never worked from a clone. Every
-requirement it imposes is quoted at the top of the module that implements it, so
-the code is readable without it; nothing here should be taken as a substitute
-for the document itself.
+requirement it imposes is quoted at the top of the module that implements it,
+and [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) collects all twenty-five into
+one page with their status. That is a reconstruction from the code, not a
+substitute for the document.
+
+The repository root also held the project's **original** spec in four formats,
+unmarked, contradicting this README on Neo4j, Backtrader, Vault, OPA and MLflow.
+It is now in [`docs/superseded/`](docs/superseded/) with a note on what it broke:
+it is where `requirements.txt`'s 26 unused pins came from, and where the task
+backlog got the idea that this project needed semantic retrieval.
 
 ## Why this is built the way it is
 
@@ -34,16 +41,19 @@ capability: the controls must exist before the thing they constrain.
 | Minimal trial-search harness — enough to demonstrate the null-result benchmark | built | `search.py` |
 | Execution costs, borrow, capacity in the primary result | built | `execution_costs.py` |
 | Run reproducibility — data version, code SHA, parameters, seeds, environment | built | `run_record.py` |
-| Experiment log — queryable across runs | built, **not MLflow** | `run_record.py` |
+| Experiment log — queryable across runs | built, **not MLflow** (ratified) | `run_record.py` |
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
 248 tests pass. Two caveats the row labels are too small to hold:
 
-- **The experiment log is SQLite, not MLflow.** The PRD names MLflow; what is
-  built satisfies FR-22 through FR-25 with the same triggers-not-conventions
-  approach as the rest of the module. That is a deliberate substitution and it
-  should be either ratified or reversed, not left as a silent divergence.
+- **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
+  names MLflow, which *logs* and never checks whether a run reproduces. FR-23
+  requires re-execution to produce identical results, and `replay()` enforces
+  that by restoring seeds, re-running, and comparing hashes. Adopting MLflow
+  would meet the letter of the instruction by weakening the requirement it was
+  named to serve. Recorded in `.spark-flow/memory/decisions.md`; revisit as an
+  export layer if the team wants the UI.
 - **FR-19 is only partially met.** The engine is wired and FR-21 holds and is
   audited, but *partial fills* need order-book depth this project does not have.
   Latency and slippage are demonstrated; partial fills are not. See the engine
