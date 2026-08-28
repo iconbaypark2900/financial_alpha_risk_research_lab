@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **319 tests pass** (`.venv/bin/python -m pytest -q`).
+- **325 tests pass** (`pytest -q`), and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -33,9 +33,17 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   drawdown. Each has a regression test named after it.
 - The MLflow-vs-SQLite divergence is RATIFIED (see decisions.md): SQLite stays,
   because FR-23 requires enforced reproducibility and MLflow only logs.
+- **Packaging and CI landed 2026-08-28.** `pyproject.toml` makes the project
+  installable (`pip install -e '.[all]'`), moves the pytest config off
+  `pytest.ini`, and adds `pythonpath` — without which the suite ran only when
+  pytest was invoked from the repository root, which is not how CI invokes it.
+  duckdb and nautilus_trader are modelled as extras because the package really
+  does work without them: 272 of 325 tests pass on numpy alone.
 - Outstanding: finGuard's `simulator.py` (231 lines, untested, unchecked);
   order-book data to close FR-19; the Beta gate. `visualizer.py` and `app.py`
   are deliberately not being migrated.
+- **Nothing is pushed.** `origin/main` is behind by every commit made on
+  2026-08-28; CI will not run until it is.
 - The factor library landed 2026-08-28: `factors.py`, five factors, each tested
   against hand-derived values, plus `assert_causal` — a mechanical look-ahead
   check that perturbs the future and requires the past not to move. It composes

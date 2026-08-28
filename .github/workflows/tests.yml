@@ -1,0 +1,108 @@
+# The guards in this repository only mean something if something runs them.
+#
+# tests/test_readme_is_true.py, tests/test_requirements_map.py and
+# tests/test_packaging.py exist so that a claim cannot quietly stop being true —
+# the README's figures, the requirements map, the NautilusTrader prose, the
+# FR-19 limitation, the two dependency files agreeing. Every one of them was a
+# convention until this file existed: they fired only when a person remembered
+# to type `pytest`, from the repository root, in a venv assembled by hand.
+#
+# The `minimal` job is not a formality. The package advertises that it works
+# without duckdb and nautilus_trader, and that claim had never been checked by
+# anything but hand. When it first was, it failed — a guard demanded
+# nautilus_trader be INSTALLED rather than declared, and 31 factor tests were
+# skipped by a module-level importorskip for a store they do not use.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    name: full install (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor is 3.12: numpy and nautilus_trader both require it. The cap is
+        # nautilus_trader's <3.15, which is why 3.15 is not here yet.
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install with every optional slice
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[all]'
+
+      - name: Run the suite
+        run: pytest -q
+
+      - name: The null-result benchmark still runs
+        # PRD 04 calls acceptance criterion 5 the most valuable test in the
+        # document. It is seeded, so it is also a determinism check.
+        run: python scripts/null_benchmark_demo.py
+
+      - name: The demo is deterministic
+        run: |
+          python scripts/null_benchmark_demo.py > first.txt
+          python scripts/null_benchmark_demo.py > second.txt
+          diff first.txt second.txt
+
+      - name: The README's tables regenerate
+        run: python scripts/readme_tables.py
+
+  minimal:
+    name: minimal install (numpy only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install core plus test runner, and nothing else
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: The optional slices really are absent
+        run: |
+          python - <<'PY'
+          import importlib.util as u
+          for name in ("duckdb", "nautilus_trader"):
+              assert u.find_spec(name) is None, f"{name} leaked into the minimal install"
+          print("duckdb and nautilus_trader are absent, as intended")
+          PY
+
+      - name: The package imports anyway
+        run: |
+          python - <<'PY'
+          import src.research_integrity as ri
+          assert ri.PointInTimeStore is None, "the store should degrade to None"
+          assert ri.run_backtest is None, "the engine should degrade to None"
+          import numpy as np
+          ri.assert_causal(ri.momentum, 100 * 1.01 ** np.arange(400), split=350)
+          print("controls work without the optional slices")
+          PY
+
+      - name: Run the suite, skipping only the optional slices
+        run: pytest -q -rs

@@ -1,0 +1,62 @@
+# Project metadata, dependencies and tool configuration.
+#
+# ON THE PACKAGE BEING NAMED `src`
+#
+# The import path is `src.research_integrity`, so the installed top-level
+# package is literally `src` — a generic name that would be antisocial on PyPI.
+# It is kept because this is an internal tool that is never published, the
+# README documents that import path throughout, and renaming it is a change to
+# the public API rather than a packaging detail. If this ever becomes a library,
+# the move is `src/research_integrity` -> `research_integrity/` at the root, and
+# it is mechanical.
+#
+# DEPENDENCIES ARE DECLARED TWICE, ON PURPOSE
+#
+# Here, and in requirements.txt — which carries the reasoning for each one and
+# the list of what was deliberately removed. Two sources of truth is normally
+# how drift starts, so `tests/test_packaging.py` fails when they disagree.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "financial-alpha-risk-research-lab"
+version = "0.1.0"
+description = "A quantitative research platform whose design goal is making the strategies it finds believable"
+readme = "README.md"
+# 3.12, not 3.11. Nothing here uses syntax newer than 3.11 and every module
+# compiles under 3.13 — but numpy and nautilus_trader both require >=3.12, so a
+# 3.11 floor would be a claim that fails at `pip install`. nautilus_trader also
+# caps at <3.15, which bites only the `engine` extra. The CI matrix checks the
+# range rather than leaving it asserted in a metadata file.
+requires-python = ">=3.12"
+
+# Core is numpy alone, and that is not a simplification: the suite runs 272 of
+# 325 tests with nothing else installed. duckdb and nautilus_trader are
+# import-guarded, their slices skip when absent, and modelling them as required
+# would misdescribe a configuration this project actually supports and tests.
+dependencies = [
+    "numpy>=1.21.0",
+]
+
+[project.optional-dependencies]
+# The point-in-time store. Without it, PointInTimeStore is None.
+store = ["duckdb>=1.0.0"]
+# The event-driven backtest engine. Without it, run_backtest is None.
+engine = ["nautilus_trader>=1.231.0"]
+dev = ["pytest>=7.0.0"]
+# Everything, matching requirements.txt. Listed explicitly rather than by
+# self-reference so it works on older pip.
+all = ["duckdb>=1.0.0", "nautilus_trader>=1.231.0", "pytest>=7.0.0"]
+
+[tool.setuptools]
+packages = ["src", "src.research_integrity", "src.portfolio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Without this the suite runs only when pytest is invoked from the repository
+# root: `pytest /path/to/repo/tests` from anywhere else failed with
+# "No module named 'src'". A test suite that works under one invocation is a
+# test suite most CI configurations will not run.
+pythonpath = ["."]

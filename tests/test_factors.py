@@ -31,8 +31,11 @@ from src.research_integrity.factors import (
     size,
 )
 
-duckdb = pytest.importorskip("duckdb", reason="the point-in-time store needs duckdb")
-from src.research_integrity.point_in_time import PointInTimeStore  # noqa: E402
+# Only the fundamental-factor tests need the store. A module-level
+# importorskip here skipped all 31 tests without duckdb — including every
+# causality test, which depends on nothing but numpy. Skipping tests that would
+# have passed is not free: it is coverage that silently is not there, and the
+# minimal-install CI job existed to run exactly these.
 
 
 @pytest.fixture()
@@ -200,10 +203,13 @@ def test_assert_causal_needs_data_on_both_sides(growing):
 # --- fundamentals must respect the reporting lag ---------------------------
 
 @pytest.fixture()
-def store(tmp_path: Path) -> PointInTimeStore:
+def store(tmp_path: Path):
     """Book equity for one company: the quarter ends 2023-12-31 and the filing
     lands 2024-02-15, which is an ordinary six-week lag, not a pathological one.
     """
+    pytest.importorskip("duckdb", reason="the point-in-time store needs duckdb")
+    from src.research_integrity.point_in_time import PointInTimeStore
+
     s = PointInTimeStore(tmp_path / "facts.duckdb")
     s.register_dataset("fundamentals", point_in_time=True)
     s.append_facts("fundamentals", [
@@ -257,7 +263,8 @@ def test_a_restatement_does_not_reach_back(store):
 
 def test_the_factor_refuses_a_dataset_with_no_point_in_time_guarantee(tmp_path):
     """FR-07 propagates: a factor over a non-PIT dataset must refuse, not warn."""
-    from src.research_integrity.point_in_time import PointInTimeError
+    pytest.importorskip("duckdb", reason="the point-in-time store needs duckdb")
+    from src.research_integrity.point_in_time import PointInTimeError, PointInTimeStore
 
     s = PointInTimeStore(tmp_path / "bad.duckdb")
     s.register_dataset("vendor_snapshot", point_in_time=False,

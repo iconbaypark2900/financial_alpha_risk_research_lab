@@ -187,7 +187,6 @@ def test_the_readme_does_not_claim_nautilus_supplies_what_nothing_imports():
     other direction: the prose must no longer say "unmet", and must still admit
     the half of FR-19 that is not demonstrated. A correction that overshoots
     into a fresh overclaim is the same defect wearing the opposite sign."""
-    import importlib.util
     import re
 
     source = (Path(__file__).resolve().parent.parent / "src" / "research_integrity")
@@ -198,7 +197,6 @@ def test_the_readme_does_not_claim_nautilus_supplies_what_nothing_imports():
     imports = re.compile(r"^\s*(?:from|import)\s+nautilus_trader\b", re.MULTILINE)
     imports_it = any(imports.search(path.read_text(encoding="utf-8"))
                      for path in source.glob("*.py"))
-    installed = importlib.util.find_spec("nautilus_trader") is not None
 
     text = (source / "execution_costs.py").read_text(encoding="utf-8")
     if imports_it:
@@ -213,5 +211,15 @@ def test_the_readme_does_not_claim_nautilus_supplies_what_nothing_imports():
             "No module imports nautilus_trader, so FR-19 and FR-21 are unmet. "
             "execution_costs.py must say so. Wire the engine in, or restore the "
             "sentence stating the requirements are unmet rather than delegated.")
-    assert installed or not imports_it, (
-        "a module imports nautilus_trader but it is not installed")
+    # Whether it is INSTALLED is a property of this environment, not of the
+    # repository: the engine is optional and import-guarded, and the suite is
+    # expected to pass in a minimal install where it is absent. What must hold
+    # is that a module importing it is matched by a DECLARED dependency —
+    # otherwise the import is one `pip install` away from an ImportError nobody
+    # predicted. This assertion previously required installation and failed in
+    # exactly the minimal configuration the package advertises support for.
+    if imports_it:
+        requirements = (Path(__file__).resolve().parent.parent
+                        / "requirements.txt").read_text(encoding="utf-8")
+        assert "nautilus_trader" in requirements, (
+            "a module imports nautilus_trader but nothing declares it")

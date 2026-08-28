@@ -101,7 +101,12 @@ def test_the_summary_counts_match_the_rows():
 def test_the_superseded_specs_are_not_in_the_repository_root():
     """They read as the authoritative spec while sitting there, and they
     contradict the README on Neo4j, Backtrader, Vault, OPA and MLflow."""
-    strays = sorted(p.name for p in ROOT.glob("financial_alpha_risk_research_lab*"))
+    # Only the spec documents themselves. An editable install drops a
+    # `financial_alpha_risk_research_lab.egg-info/` directory here, which git
+    # ignores and this test used to report as a returned specification.
+    spec_suffixes = {".md", ".xml", ".json", ".pdf"}
+    strays = sorted(p.name for p in ROOT.glob("financial_alpha_risk_research_lab*")
+                    if p.is_file() and p.suffix in spec_suffixes)
     assert not strays, (
         f"{strays} are back in the repository root. They are superseded by "
         "PRD 04; they belong in docs/superseded/ with the note explaining why.")
