@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-430 tests pass, on every push. Two caveats the row labels are too small to hold:
+435 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 430 passed
+.venv/bin/python -m pytest -q                      # 435 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **329 of the 430 tests**; the point-in-time store and the engine
+alone and runs **329 of the 435 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -508,7 +508,27 @@ destroyed — scored *higher* than the real one. Deflated Sharpe 0.1366. Noise.
 
 A sweep whose range reached into the protected holdout was refused before
 anything was counted, and the run was recorded with the code SHA that produced
-it.
+it — then **replayed from that record alone**:
+
+```
+FR-23  replayed from the record alone: reproduced=True, hash c33b4a091570...
+       trial count 2,691 before, 2,691 after
+```
+
+That is the first time FR-23 has been demonstrated rather than asserted.
+`replay()` was correct, tested fourteen times in its own file, and called by
+nothing — the same orphaned-control problem the seam was built to end, one layer
+up, and the orphan guard itself did not cover `.replay(`. It does now.
+
+The trial count is unchanged across the replay, and that exception matters: a
+replay re-executes a search that was **already counted**, so counting it again
+would inflate the very number the deflated Sharpe depends on. It is the one
+place in this package where re-running a backtest must not touch the counter.
+
+A run also stays reproducible across **restatements**, which is stronger than
+FR-23 asks for and falls out of FR-02: the replay reads as-first-reported, so a
+later revision cannot change what it sees. New data landing inside the range
+does break it, correctly, and there is a test for each.
 
 ### What real data did not fix
 

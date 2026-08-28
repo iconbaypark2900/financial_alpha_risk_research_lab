@@ -50,6 +50,7 @@ and the dishonest path deliberate, which is weaker than impossible.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
@@ -127,14 +128,16 @@ class Study:
                search_id: str | None = None,
                seeds: dict[str, int] | None = None,
                factors: Sequence[str] | None = None,
-               allow_uncommitted: bool = False, **kwargs) -> dict[str, Any]:
+               allow_uncommitted: bool = False,
+               replay_params: dict[str, Any] | None = None,
+               **kwargs) -> dict[str, Any]:
         """Run a parameter sweep with every control attached."""
         from .search import run_search
 
         version = self._admit(start, end)
         run_id = self.log.start(                                    # FR-22, FR-24
-            strategy, params={"n_param_sets": len(param_sets),
-                              "start": start, "end": end},
+            strategy, params=replay_params or {"n_param_sets": len(param_sets),
+                                               "start": start, "end": end},
             seeds=seeds or {"deterministic": 0},
             dataset_versions=[version], factors=factors,
             allow_uncommitted=allow_uncommitted)
@@ -216,8 +219,53 @@ class Study:
                 f"{self.dataset_id} — nothing to search over")
 
         returns = to_returns(values) if to_returns else _simple_returns(values)
-        return self.search(returns, param_sets,
-                           start=dates[0], end=dates[-1], **kwargs)
+        # FR-22 asks for the FULL parameter set, and it means it: a run record
+        # holding `n_param_sets: 2691` documents that a search happened without
+        # being sufficient to repeat it. `replay` passes these back as keyword
+        # arguments, so what is recorded here IS the call signature.
+        return self.search(
+            returns, param_sets, start=dates[0], end=dates[-1],
+            replay_params={
+                "entity_id": entity_id, "field": field,
+                "start": start, "end": end, "knowledge_date": knowledge_date,
+                "param_sets": [dict(p) for p in param_sets],
+                "search_id": kwargs.get("search_id"),
+            },
+            **kwargs)
+
+    # ---- FR-23: re-execute a recorded run and require the same answer ----
+    def replay_search(self, run_id: str) -> dict[str, Any]:
+        """Re-run a recorded search and require a bitwise-identical result.
+
+        FR-23 says any past run MUST be re-executable from its record. `replay`
+        implemented that and had never been called on a real run — the same
+        orphaned-control problem `Study` was written to end, one layer up, and
+        the guard in tests/test_study.py did not cover `.replay(` either.
+
+        The replay uses a THROWAWAY trial counter. A replay re-executes a search
+        that was already counted; counting it again would inflate the very
+        number the deflated Sharpe depends on, so verification must not look
+        like new research. That is the one place where re-running a backtest
+        should not touch the counter, and it is worth being explicit about
+        because everything else in this package argues the opposite.
+        """
+        import tempfile
+
+        from .search import run_search
+        from .trial_counter import TrialCounter
+
+        def recompute(*, entity_id: str, field: str, start, end,
+                      knowledge_date, param_sets, search_id=None, **ignored):
+            _, values = self.store.series(self.dataset_id, entity_id, field,
+                                          start=start, end=end,
+                                          knowledge_date=knowledge_date)
+            with tempfile.TemporaryDirectory() as tmp:
+                return run_search(
+                    _simple_returns(values), param_sets,
+                    counter=TrialCounter(Path(tmp) / "replay.db"),
+                    dataset_id=self.dataset_id, search_id=search_id)
+
+        return self.log.replay(run_id, recompute)
 
     # ---- FR-11, FR-12: the holdout, which is not an ordinary backtest -----
     def preregister(self, *, strategy_family: str, hypothesis: str,

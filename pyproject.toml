@@ -32,7 +32,7 @@ readme = "README.md"
 # range rather than leaving it asserted in a metadata file.
 requires-python = ">=3.12"
 
-# Core is numpy alone, and that is not a simplification: the suite runs 329 of 430 tests with nothing else installed. duckdb and nautilus_trader are
+# Core is numpy alone, and that is not a simplification: the suite runs 329 of 435 tests with nothing else installed. duckdb and nautilus_trader are
 # import-guarded, their slices skip when absent, and modelling them as required
 # would misdescribe a configuration this project actually supports and tests.
 dependencies = [

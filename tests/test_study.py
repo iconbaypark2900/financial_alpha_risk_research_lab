@@ -45,10 +45,21 @@ def clean_repo(tmp_path: Path) -> Path:
 def study(tmp_path: Path, clean_repo: Path) -> Study:
     store = PointInTimeStore(tmp_path / "facts.duckdb")
     store.register_dataset("sp500", point_in_time=True)
-    store.append_facts("sp500", [
-        {"entity_id": "ACME", "field": "close", "value": 100.0,
-         "effective_date": "2015-01-02", "knowledge_date": "2015-01-02"},
-    ])
+    # A price series long enough for a crossover grid to run over.
+    import datetime as _dt
+
+    day = _dt.date(2019, 1, 1)
+    facts = []
+    price = 100.0
+    for i in range(320):
+        while day.weekday() >= 5:
+            day += _dt.timedelta(days=1)
+        price *= 1.0 + (0.004 if i % 3 else -0.005)
+        facts.append({"entity_id": "PRICE", "field": "close", "value": price,
+                      "effective_date": day.isoformat(),
+                      "knowledge_date": day.isoformat()})
+        day += _dt.timedelta(days=1)
+    store.append_facts("sp500", facts)
     return Study(
         dataset_id="sp500",
         store=store,
@@ -229,6 +240,88 @@ def test_status_reports_what_every_control_has_seen(study, returns):
     assert status["dataset_version"] == study.store.current_version("sp500")
 
 
+# --- FR-23: a recorded run, actually re-executed ---------------------------
+
+def test_a_recorded_search_replays_to_an_identical_result(study, returns):
+    """The first thing to call replay() on a real run.
+
+    FR-23 was marked met on the strength of unit tests for a control nothing
+    reached. This exercises it through the seam: record, then re-execute from
+    the record alone and require the same hash.
+    """
+    from src.research_integrity.run_record import NotReproducible  # noqa: F401
+
+    result = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    verified = study.replay_search(result["run_id"])
+    assert verified["reproduced"] is True
+    assert study.log.get(result["run_id"])["replay_verified"] == 1
+
+
+def test_a_replay_does_not_inflate_the_trial_count(study, returns):
+    """The one place re-running a backtest must NOT touch the counter.
+
+    A replay re-executes a search that was already counted; counting it again
+    would inflate the number the deflated Sharpe depends on. Everything else in
+    this package argues the opposite, so the exception is worth pinning.
+    """
+    result = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    before = study.counter.trial_count("sp500")
+    study.replay_search(result["run_id"])
+    assert study.counter.trial_count("sp500") == before
+
+
+def test_a_restatement_does_not_break_a_replay(study):
+    """Discovered by writing the failure test below and having it pass.
+
+    Appending a revised value for a period already loaded does NOT change what
+    the replay reads, because `series` returns as-first-reported. That is the
+    point-in-time store doing its job: a run stays reproducible across
+    revisions, which is a stronger guarantee than FR-23 asks for and follows
+    from FR-02 rather than from anything in the run record.
+    """
+    result = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    existing = study.store.series("sp500", "PRICE", "close")[0][10]
+    study.store.append_facts("sp500", [
+        {"entity_id": "PRICE", "field": "close", "value": 999.0,
+         "effective_date": existing, "knowledge_date": "2030-01-01",
+         "is_restatement": True},
+    ])
+    assert study.replay_search(result["run_id"])["reproduced"] is True
+
+
+def test_a_replay_fails_when_new_data_lands_inside_the_range(study):
+    """The teeth. A replay that cannot fail verifies nothing.
+
+    A period that was not there when the run executed genuinely changes what the
+    query returns, and no amount of point-in-time discipline can make the old
+    result reproduce — which is exactly what FR-23 exists to surface.
+    """
+    from src.research_integrity.run_record import NotReproducible
+
+    result = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    dates = study.store.series("sp500", "PRICE", "close")[0]
+    gap = "2019-01-05"                       # a weekend the fixture skipped
+    assert gap not in dates and dates[0] < gap < dates[-1]
+    study.store.append_facts("sp500", [
+        {"entity_id": "PRICE", "field": "close", "value": 123.45,
+         "effective_date": gap, "knowledge_date": gap},
+    ])
+    with pytest.raises(NotReproducible, match="did not reproduce"):
+        study.replay_search(result["run_id"])
+
+
+def test_the_record_holds_the_full_parameter_set_not_a_count(study):
+    """FR-22 asks for the full parameter set and means it: a record saying
+    `n_param_sets: 441` documents that a search happened without being
+    sufficient to repeat it."""
+    import json
+
+    result = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    params = json.loads(study.log.get(result["run_id"])["params_json"])
+    assert params["param_sets"] == [dict(p) for p in GRID]
+    assert params["entity_id"] == "PRICE"
+
+
 # --- the guard that would have caught the original problem -----------------
 
 def test_no_control_is_orphaned():
@@ -250,6 +343,10 @@ def test_no_control_is_orphaned():
         ".start_trial(": ("trial_counter.py", "FR-08"),
         ".log.start(": ("run_record.py", "FR-22/FR-24"),
         ".current_version(": ("point_in_time.py", "FR-06"),
+        # Added after this guard missed it: replay() was correct, tested 14
+        # times in its own file, and called by nothing. FR-23 was marked met on
+        # the strength of unit tests for a control no real run ever reached.
+        ".log.replay(": ("run_record.py", "FR-23"),
     }
     for call, (home, requirement) in controls.items():
         callers = sorted(

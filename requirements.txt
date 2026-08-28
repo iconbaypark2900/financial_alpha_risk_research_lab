@@ -2,7 +2,7 @@
 # by code in this repository, or is the engine the PRD names. Nothing else
 # belongs in this file.
 #
-# For a minimal install, `pip install -e .` gives numpy alone and runs 329 of the 430 tests; the store and engine slices skip. `pip install -e '.[all]'`
+# For a minimal install, `pip install -e .` gives numpy alone and runs 329 of the 435 tests; the store and engine slices skip. `pip install -e '.[all]'`
 # matches this file. pyproject.toml is the machine-readable form of it, and
 # tests/test_packaging.py fails when the two disagree.
 #

@@ -179,6 +179,16 @@ def main(argv: list[str] | None = None) -> int:
         runs = study.log.query()
         print(f"  FR-25    {len(runs)} run(s) recorded, outcome "
               f"{runs[0]['outcome']}, code {runs[0]['code_sha'][:8]}")
+
+        # ---- FR-23: re-execute it, and require the same answer -----------
+        before = study.counter.trial_count("sp500")
+        verified = study.replay_search(result["run_id"])
+        after = study.counter.trial_count("sp500")
+        print(f"  FR-23    replayed from the record alone: "
+              f"reproduced={verified['reproduced']}, "
+              f"hash {verified['result_hash'][:12]}...")
+        print(f"           trial count {before:,} before, {after:,} after — a "
+              "replay is verification, not new research")
     return 0
 
 
