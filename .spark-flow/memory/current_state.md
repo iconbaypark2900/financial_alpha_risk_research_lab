@@ -1,9 +1,29 @@
 # Current state
 
 - Project: `/home/iconbaypark2900/dataScience/financial_alpha_risk_research_lab`
-- Updated: 2026-05-31T01:10:11
+- Updated: 2026-08-28
 - Project phase: Alpha (`alpha`)
-- After task: finguard-integration-001
+- After task: V0 research-integrity build (commits `6eb543f`..`6d39c2a`), then a
+  documentation truth-up
+
+## What is actually in the tree
+
+The finGuard integration recorded below was **reverted** by commit `6eb543f`,
+which removed the template scaffolding — `src/portfolio_risk_service/` included —
+and rebuilt against the revised PRD 04. finGuard is back in `migration_inbox/`
+as V1 input. The closed-slice log further down is a record of what happened, not
+of what is present.
+
+Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
+minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
+`point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
+
+- **192 tests pass** (`.venv/bin/python -m pytest -q`).
+- Outstanding V0 work: the **factor library** (not started), and **wiring
+  NautilusTrader** — it is pinned and installed but imported by nothing, so
+  FR-19 and FR-21 are unmet rather than delegated.
+- The experiment log is SQLite, not the MLflow the PRD names. Deliberate; owed a
+  ratify-or-reverse decision.
 
 ## Latest debrief
 
@@ -23,6 +43,10 @@
 - See `tasks/backlog.yaml`
 
 ## Repo git status
+
+Recorded 2026-05-31, before the rebuild. The files listed were either committed
+or removed by `6eb543f`; run `git status` for the live answer rather than
+trusting this block.
 
 ```text
 ?? .spark-flow/

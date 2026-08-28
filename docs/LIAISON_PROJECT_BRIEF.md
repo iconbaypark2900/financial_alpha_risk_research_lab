@@ -2,24 +2,47 @@
 
 > Machine: DGX Spark | Org: dataScience | Phase: Alpha
 > Path: `~/dataScience/financial_alpha_risk_research_lab`
-> Last updated: 2026-05-30
+> Last updated: 2026-08-28
+
+> **The sections below dated 2026-05-30/31 describe an architecture that no
+> longer exists.** Commit `6eb543f` removed the template scaffolding and rebuilt
+> the repository against the revised PRD 04; `src/portfolio_risk_service/` and
+> its Kelly, drawdown and simulator modules went with it, and finGuard returned
+> to `migration_inbox/` as V1 input. Those sections are kept as dated records of
+> what was reviewed at the time — they are not descriptions of the current tree.
+> The problem statement, happy path and validation profile have been rewritten
+> to match what is actually here.
 
 ---
 
 ## Problem statement
 
-A quantitative finance research platform for developing, testing, and optimizing trading strategies with advanced risk management — and the target integration repo for the finGuard Kelly/drawdown/simulator migration.
+A quantitative research platform whose design goal is not finding strategies but
+making the ones it finds believable. V0 is the research-integrity layer: a global
+trial counter, deflated Sharpe, a protected holdout, purged cross-validation, a
+point-in-time store, execution costs and capacity, and enforced run
+reproducibility. The finGuard Kelly/drawdown/simulator migration is **V1** input
+staged in `migration_inbox/`, not a current integration target.
 
 ---
 
 ## Happy path
 
 ```bash
-cd ~/dataScience/financial_alpha_risk_research_lab
-.venv/bin/python -m pytest tests/ -q
-# Expected: 28 tests passing
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest -q
+# Expected: 192 tests passing
+
+.venv/bin/python scripts/null_benchmark_demo.py
+# Acceptance criteria 4 and 5. Deterministic; seeds are fixed in the script.
+```
+
+finGuard's own suite is V1 scope and is not run as part of this project's gate:
+
+```bash
 PYTHONPATH=migration_inbox/finGuard/src .venv/bin/python -m pytest migration_inbox/finGuard/tests/ -q
-# Expected: 23 tests passing
+# 23 tests; needs pandas, which the root requirements.txt no longer installs.
 ```
 
 ---
@@ -36,8 +59,8 @@ PYTHONPATH=migration_inbox/finGuard/src .venv/bin/python -m pytest migration_inb
 | Field | Value |
 |-------|-------|
 | Profile | `python` |
-| Smoke command | `.venv/bin/python -m pytest tests/ -q` |
-| Note | Requires: `pip install pandas numpy yfinance pytest-asyncio` in `.venv` |
+| Smoke command | `.venv/bin/python -m pytest -q` |
+| Note | `pip install numpy duckdb pytest` is sufficient. `nautilus_trader` is pinned but not yet imported. |
 
 ```bash
 cd ~/dataScience/financial_alpha_risk_research_lab
@@ -64,6 +87,8 @@ Pattern: `python-cli`
 | Financial risk — research vs live | Label all outputs as research; no live API keys in git |
 | finGuard merge scope creep | L1 proof closed (`finguard-proof-001`); merge scoped to L4 |
 | Missing pyproject.toml | python profile runs but uses system pytest; venv activation required |
+| Documentation drifting from the code | `tests/test_readme_is_true.py` recomputes every numeric table in the README and fails when the page and the code disagree. Four tables were stale for six commits before it existed. |
+| NautilusTrader named as the engine but not imported | FR-19 and FR-21 are unmet, not delegated. Stated as such in the README and in `execution_costs.py`; a test prevents the claim returning without the import. |
 
 ---
 

@@ -1,64 +1,45 @@
-# Core dependencies
+# V0 — Trustworthy Backtests. Everything here is imported by code in this
+# repository, or is the engine the PRD names. Nothing else belongs in this file.
+#
+# WHY IT IS THIS SHORT
+#
+# This file previously pinned 30 packages, of which four were used. Among the
+# unused: `neo4j`, on the same page as a README section citing PRD 04 NG3 —
+# "Not a graph database application. Neo4j struck." — and a full authentication
+# stack (pyjwt, python-jose, passlib) purchased against the threat model the
+# README explicitly declines to defend against. It also pinned `torch`,
+# `transformers`, `sentence-transformers`, `openai`, `qdrant-client`,
+# `opensearch-py`, `mlflow`, `optuna`, `river`, `fastapi`, `vectorbt`, and
+# `PyPortfolioOpt`, none of which any module imports.
+#
+# A dependency file is a claim about what the system needs. An inherited list
+# nobody has read is a claim nobody has checked, and it is the reason `backtrader`
+# stayed pinned here after the PRD struck it by name. The removals are recoverable
+# from git history; re-add a line when an import needs it, not before.
+
 numpy>=1.21.0
-pandas>=1.3.0
-asyncio-mqtt>=0.11.0
-yfinance>=0.2.18
 
-# Quantitative Finance Libraries
-vectorbt>=0.20.0
-# backtrader: STRUCK. PRD section 3 says so explicitly — 'Whatever is
-# chosen, Backtrader should be struck.' It was still pinned here.
-nautilus_trader>=1.231.0
-PyPortfolioOpt>=1.5.0
-cvxpy>=1.2.0
-
-# Machine Learning Libraries
-torch>=1.12.0
-scikit-learn>=1.1.0
-river>=0.14.0
-
-# Optimization Libraries
-optuna>=3.0.0
-
-# Database and Storage
-opensearch-py>=2.2.0
-qdrant-client>=1.1.4
-neo4j>=5.0.0
-
-# Vector Embeddings & NLP
-sentence-transformers>=2.2.0
-transformers>=4.20.0
-openai>=0.27.0
-
-# Data Processing
-pyarrow>=8.0.0
-
-# API & Web Framework
-fastapi>=0.85.0
-uvicorn>=0.18.0
-httpx>=0.23.0
-
-# Configuration & Logging
-pydantic>=1.10.0
-python-dotenv>=0.19.0
-structlog>=22.1.0
-
-# Testing
-pytest>=7.0.0
-pytest-asyncio>=0.19.0
-
-# Observability
-mlflow>=2.0.0
-langfuse>=1.0.0
-prometheus-client>=0.15.0
-
-# Security & Authentication
-pyjwt>=2.4.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.0
-
-# Research data store. PRD section 6 names DuckDB as the query engine and
-# Iceberg for versioning. DuckDB is used directly over the bitemporal fact
-# table; see src/research_integrity/point_in_time.py for why Iceberg time
-# travel alone does not satisfy FR-01.
+# The query engine over the bitemporal fact table (PRD §6). Imported by
+# point_in_time.py, which degrades gracefully if it is absent.
 duckdb>=1.0.0
+
+# The backtest and execution engine the PRD names. Pinned and installed, and
+# NOT YET IMPORTED by anything here — so FR-19 and FR-21 are unmet rather than
+# delegated. It stays in this file because the decision to use it is made and
+# the wiring is the outstanding work; see src/research_integrity/execution_costs.py.
+nautilus_trader>=1.231.0
+
+# --- test-only -------------------------------------------------------------
+pytest>=7.0.0
+
+# NOT LISTED, DELIBERATELY
+#
+# backtrader — PRD §3: "Whatever is chosen, Backtrader should be struck."
+# neo4j      — PRD NG3: "Not a graph database application. Neo4j struck."
+# mlflow     — the PRD names it for the experiment log; run_record.py implements
+#              FR-22 through FR-25 over SQLite instead. That substitution is
+#              flagged in the README and is owed a decision, so pinning the
+#              library it replaced would misrepresent which one is in use.
+#
+# migration_inbox/finGuard carries its own requirements.txt and is V1 input,
+# not a dependency of anything in src/.

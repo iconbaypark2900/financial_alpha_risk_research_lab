@@ -9,11 +9,21 @@ by hand when the spec names one would repeat the mistake made with Mitiq earlier
 in this project: the spec named the library, the dependency file pinned it, and
 the code hand-rolled it anyway.
 
-NautilusTrader 1.231.0 is installed and supplies FR-19 (partial fills, latency)
-and FR-21 (look-ahead is structurally impossible in an event-driven engine,
-because data arrives as timestamped messages rather than being indexable).
+NautilusTrader 1.231.0 is pinned and installed. It is NOT yet imported by any
+module in this package, so FR-19 (partial fills, latency) and FR-21 (look-ahead
+structurally impossible in an event-driven engine, because data arrives as
+timestamped messages rather than being indexable) are currently UNMET rather
+than delegated.
 
-What it does NOT supply, and what is therefore built here:
+That distinction is the reason this paragraph is worded so carefully. It
+previously read "is installed and supplies FR-19 and FR-21", which was the
+Mitiq mistake in its second and quieter form: not hand-rolling a named library,
+but booking credit for one that was never called. A requirement is not satisfied
+by a line in a dependency file. `tests/test_readme_is_true.py` asserts that this
+claim cannot return while the import does not exist.
+
+What NautilusTrader would not supply even once wired, and is therefore built
+here regardless:
 
   FR-17  a market-impact model as a function of PARTICIPATION RATE
   FR-18  borrow availability as a hard constraint, not a cost adjustment

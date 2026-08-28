@@ -2,7 +2,12 @@
 
 A quantitative research platform whose primary design goal is **not** finding
 strategies — it is making the strategies it finds *believable*. The specification
-is [`prd_04_financial_alpha_research_lab.md`](../../prd_04_financial_alpha_research_lab.md).
+is `prd_04_financial_alpha_research_lab.md`, which is **not in this repository**
+and is not reachable from it — the link that used to be here resolved two
+directories above the repository root and had never worked from a clone. Every
+requirement it imposes is quoted at the top of the module that implements it, so
+the code is readable without it; nothing here should be taken as a substitute
+for the document itself.
 
 ## Why this is built the way it is
 
@@ -21,16 +26,41 @@ capability: the controls must exist before the thing they constrain.
 
 ## V0 scope — Trustworthy Backtests
 
-| Component | Status |
-|---|---|
-| **Research integrity** — trial counter, deflated Sharpe, protected holdout, pre-registration | in progress |
-| Point-in-time data store — Iceberg over Parquet, DuckDB query engine | not started |
-| Factor library — small, each factor unit-tested against known values | not started |
-| Backtest engine — NautilusTrader, with costs, borrow, partial fills, impact | not started |
-| Minimal trial-search harness — enough to demonstrate the null-result benchmark | not started |
-| Capacity analysis in the primary result | not started |
-| Run reproducibility — data version, code SHA, parameters, environment | not started |
-| Experiment log — MLflow | not started |
+| Component | Status | Where |
+|---|---|---|
+| **Research integrity** — trial counter, deflated Sharpe, protected holdout, pre-registration | built | `core.py`, `trial_counter.py`, `holdout.py` |
+| Purged, embargoed cross-validation | built | `cross_validation.py` |
+| Point-in-time data store — DuckDB over a bitemporal fact table | built | `point_in_time.py` |
+| Minimal trial-search harness — enough to demonstrate the null-result benchmark | built | `search.py` |
+| Execution costs, borrow, capacity in the primary result | built | `execution_costs.py` |
+| Run reproducibility — data version, code SHA, parameters, seeds, environment | built | `run_record.py` |
+| Experiment log — queryable across runs | built, **not MLflow** | `run_record.py` |
+| Backtest engine — NautilusTrader, partial fills, latency | **dependency only, not wired** | — |
+| Factor library — small, each factor unit-tested against known values | **not started** | — |
+
+192 tests pass. Two caveats the row labels are too small to hold:
+
+- **The experiment log is SQLite, not MLflow.** The PRD names MLflow; what is
+  built satisfies FR-22 through FR-25 with the same triggers-not-conventions
+  approach as the rest of the module. That is a deliberate substitution and it
+  should be either ratified or reversed, not left as a silent divergence.
+- **NautilusTrader is installed and pinned, and nothing imports it.** So FR-19
+  (partial fills, latency) and FR-21 (structural absence of look-ahead) are
+  currently **unmet**, not delegated. See the note under execution costs below.
+
+## Running it
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest -q                      # 192 passed
+.venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
+.venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
+```
+
+Verified on CPython 3.14. `nautilus_trader` is the heaviest line in
+`requirements.txt` by a wide margin and nothing imports it yet, so
+`pip install numpy duckdb pytest` is enough to run the whole suite today.
 
 ## Deliberately out of scope
 
@@ -66,17 +96,36 @@ counter.record_outcome(trial, sharpe=0.12, n_observations=1250)
 inputs = counter.deflation_inputs("sp500")     # {"n_trials": ..., "var_trials": ...}
 ```
 
-The effect, on one unchanged result as the search around it grows:
+The effect, on one unchanged result as the search around it grows. Observed
+per-period Sharpe **0.0413** — the best of the 7,866-trial sweep in the
+null-benchmark section below — held fixed over 1,250 observations at normal skew
+and kurtosis, with **V[{SR_n}] = 9.258e-05** as *recorded by the counter* across
+that sweep. Only the trial count varies:
 
 | trials run | deflated Sharpe | verdict at 95% |
 |---:|---:|---|
-| 10 | 0.9998 | significant |
-| 100 | 0.9657 | significant |
-| 1,000 | 0.8814 | **not** significant |
-| 5,000 | 0.7820 | **not** significant |
+| 10 | 0.8220 | **not** significant |
+| 100 | 0.7251 | **not** significant |
+| 1,000 | 0.6375 | **not** significant |
+| 5,000 | 0.5811 | **not** significant |
 
-Same observed Sharpe of 0.12 over 1,250 observations throughout. Searching
-harder makes it less impressive, without anyone having to choose to be honest.
+Searching harder makes the same result less impressive, without anyone having to
+choose to be honest.
+
+**The variance is stated because the effect is entirely a function of it.** An
+earlier version of this table showed a result crossing from significant to not
+between 100 and 1,000 trials, and quoted no V[{SR_n}] at all — which made it
+unreproducible, and, at the variance this sweep actually produces, wrong. The
+figures above are regenerated by `python3 scripts/readme_tables.py`, and
+`tests/test_readme_is_true.py` fails if this page and the code disagree.
+
+A single-family parameter grid produces Sharpe estimates that cluster tightly,
+so V[{SR_n}] is small and deflation bites gently — over this range it costs
+about 0.24. A search across genuinely different strategy families would spread
+those estimates much further and deflate far harder. That is the correct
+behaviour and not a knob: the penalty scales with how much of the outcome space
+the search actually covered, which is why the variance has to be measured from
+recorded trials rather than assumed.
 
 **Why it is append-only.** FR-08 requires counting "runs whose results were
 discarded", so trials are recorded when they START, before the result exists,
@@ -136,9 +185,9 @@ against those same returns **reshuffled**:
                                 AS GIVEN    RESHUFFLED
   ----------------------------------------------------
   trials counted                   7,866         7,866
-  best raw Sharpe                 0.0163        0.0303
-  best parameters               (22, 25)       (9, 16)
-  DEFLATED Sharpe                 0.0930        0.3702
+  best raw Sharpe                 0.0413        0.0535
+  best parameters               (21, 22)       (9, 16)
+  DEFLATED Sharpe                 0.5834        0.7594
 ```
 
 Reshuffling preserves the marginal distribution exactly — same mean, volatility,
@@ -148,8 +197,12 @@ score this *procedure* manufactures from noise at this trial count.
 
 Here it scored **higher** than the real data. The raw Sharpe was measuring
 search intensity, not signal. The deflated Sharpe is the headline figure
-(FR-09), and both fall far below 0.95 — the correct answer, which the raw figure
-alone would have obscured in both columns.
+(FR-09), and both fall below 0.95 — the correct answer, which the raw figure
+alone would have obscured in both columns. Note that the *reshuffled* column
+deflates to 0.7594, the higher of the two: deflation is not a lie detector, and
+a procedure searching 7,866 times over pure noise still lands well above zero.
+What it does is put the two columns on a scale where the comparison is possible
+at all.
 
 The harness registers the entire sweep before evaluating any of it, so a search
 cannot be truncated at the moment it starts looking good and reported as though
@@ -192,14 +245,20 @@ would become the one people take when the honest numbers disappoint.
 
 ## Execution costs and capacity (FR-17, FR-18, FR-20)
 
-**The engine itself is NautilusTrader** (1.231.0, installed), as the PRD
-specifies. It supplies FR-19 (partial fills, latency) and FR-21 — look-ahead is
-structurally impossible in an event-driven engine, because data arrives as
-timestamped messages rather than being indexable. Reimplementing that by hand
-when the spec names it would repeat the Mitiq mistake made earlier in this
-project.
+**The engine is to be NautilusTrader** (1.231.0, pinned and installed), as the
+PRD specifies, and reimplementing an event-driven matching engine by hand when
+the spec names one would repeat the Mitiq mistake made earlier in this project.
 
-What NautilusTrader does not supply, and is built here:
+**It is not wired in yet, and nothing here imports it.** That matters more than
+it sounds: FR-19 (partial fills, latency) and FR-21 (look-ahead structurally
+impossible, because data arrives as timestamped messages rather than being
+indexable) are therefore **unmet**, not delegated. An earlier version of this
+paragraph said the library "supplies" both — but a dependency nothing calls
+supplies nothing, and the sentence was the only thing in the repository
+asserting otherwise. `tests/test_readme_is_true.py` now fails if that claim
+reappears while no module imports the package.
+
+What NautilusTrader would not supply even once wired, and is built here:
 
 ```python
 from src.research_integrity import Instrument, capacity, execution_cost
@@ -213,8 +272,8 @@ capacity(big, gross_sharpe=2.0, turnover_per_year=12).aum_ceiling
 | | large cap (10m ADV) | microcap (100k ADV) |
 |---|---:|---:|
 | cost of 100,000 shares | 10.3 bps | 135.2 bps |
-| participation rate | 1.0% | 100% |
-| AUM ceiling @ Sharpe 2.0 | $22,446m | $225m |
+| participation rate | 1.0% | 100.0% |
+| AUM ceiling @ Sharpe 2.0 | $22,446m | $224m |
 
 ### The impact model is the paper's, not the folklore
 
