@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-325 tests pass, on every push. Two caveats the row labels are too small to hold:
+359 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 325 passed
+.venv/bin/python -m pytest -q                      # 359 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **272 of the 325 tests**; the point-in-time store and the engine
+alone and runs **306 of the 359 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -116,7 +116,8 @@ architecture "Perfect" and rating its own gaps as LOW. The tests covered
 untested; `visualizer.py` (426 lines) is untested and does not even import,
 because it needs `plotly`, which is not a dependency here.
 
-Checking the two tested modules against their sources found this:
+Checking all three modules against their sources found this — **twelve
+defects**, every one of which flatters the strategy:
 
 | defect | effect |
 |---|---|
@@ -129,6 +130,10 @@ Checking the two tested modules against their sources found this:
 | `get_risk_metrics` | Annualised volatility beside a per-period Sharpe, in one dict |
 | `calculate_var_drawdown` | A one-period VaR named as a drawdown limit |
 | `kelly_leverage_adjustment` | Dead code — capped at 2.0 downstream of a cap at 1.0 |
+| One `DrawdownManager` shared by every simulated path | Path 2 inherited path 1's peak and **began 50% underwater** |
+| `total_returns` divided by `final_values[0]` | Returns measured against **path 0's terminal wealth**; P(loss) of 0.4 reported as 0.6 |
+| `np.random.multivariate_normal` with no seed | The whole simulation was irreproducible |
+| `volatility_multiplier` scaled the covariance | A stated 3x volatility shock delivered √3 = 1.73x |
 
 **The sign inversion is the one worth dwelling on.** For `mu = [-0.10, 0.02]`
 and `S = diag(0.04, 0.01)`, Kelly says short the first (−2.5) and hold the
@@ -166,12 +171,46 @@ problem is a QP and needs a solver this project does not depend on, so it is
 absent rather than approximated. Same call FR-14 makes about naive k-fold: the
 wrong path does not get offered behind a flag.
 
+### The simulator was rewritten, not migrated
+
+It could not be verified, because its output was a *product* of the defects
+above: it called the sign-inverting `calculate_portfolio_kelly` on every
+rebalance and `apply_drawdown_control` on every step of every path. Three more
+defects were its own, and none needed finance to catch.
+
+**Every path after the first started underwater.** One `DrawdownManager`
+instance was shared across all simulations and its peak was never reset:
+
+```
+path 1 climbs to 200   ->  peak_value 200
+path 2 starts at 100   ->  drawdown -50%, immediately throttled
+```
+
+The distribution of outcomes was an artefact of iteration order. Here the peak
+is a per-path vector, and a test recomputes each path's drawdown independently
+with the primitive from `drawdown.py` — if any peak were shared, the reported
+maxima could not match.
+
+**Returns were measured against path 0's terminal wealth.** On five paths from
+100 ending at `[120, 100, 80, 150, 90]`, two are losses, so P(loss) is 0.4. It
+reported 0.6, and path 0's return was always exactly zero whatever it did.
+
+**Nothing was seeded**, in a repository whose FR-23 requires bitwise-identical
+re-execution. `seed` is now a *required* keyword argument with no default: every
+other Monte Carlo parameter has a defensible default, and the seed does not,
+because an unseeded distribution looks exactly like a seeded one.
+
+Parameters are deliberately not re-estimated mid-simulation. finGuard recomputed
+the covariance from a trailing 22-day window, which is singular for any portfolio
+wider than 22 assets — and its Kelly returned equal weights on a singular
+covariance, so rebalancing quietly degraded to equal-weight without saying so.
+
 ### What is not migrated
 
-`simulator.py` (Monte Carlo, 231 lines) has no tests and has not been checked.
 `visualizer.py` and `app.py` are **not being migrated at all** — a 426-line
 Plotly/Streamlit UI is not portfolio construction, and this README already
-declines UI work for an internal tool.
+declines UI work for an internal tool. With the simulator rewritten,
+`migration_inbox/finGuard/` has nothing left that this project wants.
 
 ## History
 

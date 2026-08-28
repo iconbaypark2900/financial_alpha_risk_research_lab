@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **325 tests pass** (`pytest -q`), and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **359 tests pass** (`pytest -q`), and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -39,9 +39,16 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   pytest was invoked from the repository root, which is not how CI invokes it.
   duckdb and nautilus_trader are modelled as extras because the package really
   does work without them: 272 of 325 tests pass on numpy alone.
-- Outstanding: finGuard's `simulator.py` (231 lines, untested, unchecked);
-  order-book data to close FR-19; the Beta gate. `visualizer.py` and `app.py`
-  are deliberately not being migrated.
+- **V1's migration is complete** (2026-08-28). `simulator.py` was REWRITTEN
+  rather than migrated: its output was a product of the two defective functions
+  plus three of its own — one shared drawdown peak across all paths (path 2
+  began 50% underwater), returns measured against path 0's terminal wealth
+  (P(loss) 0.4 reported as 0.6), and no seed at all. Twelve defects across the
+  three finGuard modules in total.
+- `migration_inbox/finGuard/` now has nothing left this project wants;
+  `visualizer.py` and `app.py` are deliberately not migrated. Retiring the
+  directory is a loose end.
+- Outstanding: order-book data to close FR-19 (procurement); the Beta gate.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on
   2026-08-28; CI will not run until it is.
 - The factor library landed 2026-08-28: `factors.py`, five factors, each tested

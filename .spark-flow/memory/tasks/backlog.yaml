@@ -12,20 +12,20 @@ version: 1
 # met. Everything below is scoped against PRD 04 rather than against a template.
 tasks:
   - id: recommended
-    label: "Verify or drop finGuard's Monte Carlo simulator"
+    label: "Retire migration_inbox/finGuard/"
     kind: recommended
-    score: 14
-    agents: ["codex", "testing-hardening"]
+    score: 10
+    agents: ["codex", "spark-flow-closeout"]
     why: >
-      The last unmigrated piece of V1. simulator.py is 231 lines with no tests
-      and has never been checked. That matters more than it would normally,
-      because checking its two tested siblings against their sources turned up
-      nine defects in 302 lines — including a sign inversion in the portfolio
-      Kelly and a recovery-time formula understating the wait by 41.5% at a 50%
-      drawdown. The 23 tests that shipped with finGuard caught none of them.
-      Assume nothing about the untested module on the strength of the tested
-      ones. visualizer.py and app.py are NOT to be migrated: a Plotly/Streamlit
-      UI is not portfolio construction.
+      V1's migration finished 2026-08-28 and the directory now holds nothing
+      this project wants. kelly.py and drawdown.py are superseded by
+      src/portfolio/; simulator.py was rewritten rather than migrated;
+      visualizer.py and app.py are deliberately out of scope as UI. Twelve
+      defects were found across the three modules, so the directory is also a
+      standing invitation to import from the wrong one. Move it to
+      docs/superseded/ or delete it — the same call already made about the
+      original spec, and for the same reason: an outdated artefact in a
+      prominent place does damage in proportion to how official it looks.
 
   - id: near-2
     label: "Close FR-19's partial-fill half with order-book data"
