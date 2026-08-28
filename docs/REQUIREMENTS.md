@@ -93,7 +93,51 @@ and never checks. Ratified 2026-08-28 in `.spark-flow/memory/decisions.md`.
 
 ---
 
+## §5.5 Portfolio construction (V1) — **requirements not known**
+
+`src/portfolio/` implements PRD 04 §5.5. **Nobody in this repository has read
+§5.5**, and unlike V0 its requirements cannot be reconstructed from the code,
+because no module here has ever seen them. The section is listed so the hole is
+recorded rather than implied by its absence.
+
+The discipline everywhere else in this project is that a module opens by quoting
+the requirement it implements. `src/portfolio/` quotes a *section number*. The
+only FR numbers in it — FR-14 and FR-23 — are borrowed from V0 to explain design
+decisions, not requirements V1 satisfies.
+
+What is built, and what it was actually checked against:
+
+| module | verified against | status |
+|---|---|---|
+| `kelly.py` | Kelly (1956); Thorp (2006) §7 | correct per the literature |
+| `drawdown.py` | Martin & McCann (1989) for the Ulcer index; definitions for the rest | correct per the literature |
+| `simulator.py` | its own closed forms — a zero-variance path has an exact terminal value | correct per construction |
+
+**"Correct against the literature" is not "meets §5.5", and nothing here can
+tell the difference.** Verifying against the published papers is what surfaced
+thirteen defects in the migrated finGuard code, so it is far from worthless —
+but it answers a question §5.5 did not ask. A portfolio layer can implement the
+Kelly criterion flawlessly and still be the wrong thing to have built.
+
+Two ways to close this, in order of preference:
+
+1. Put PRD 04 in the repository, or a copy of §5.5 in `docs/`. Then each module
+   gets its FR quotation like every V0 module has, and this section becomes a
+   table like the four above it.
+2. Failing that, write down what §5.5 is *believed* to require and mark it a
+   reconstruction of unknown fidelity — which is worse than the document but
+   better than the current state, where the requirement is neither written down
+   nor known to be missing by anyone who has not read this page.
+
+Until then, treat every V1 status claim as "correct mathematics, unverified
+scope".
+
+---
+
 ## Summary
+
+Covers **FR-01 to FR-25 only** — V0, sections 5.1 through 5.4. V1 (§5.5) has no
+requirement numbers here because nobody has them; see the section above.
 
 | status | count |
 |---|---:|

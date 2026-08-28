@@ -64,11 +64,18 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
 
 ## Latest debrief
 
-- `.spark-flow/memory/debriefs/2026-05-31T000038.md`
+- `.spark-flow/memory/debriefs/2026-08-28T212432.md`
+- Prior: `.spark-flow/memory/debriefs/2026-05-31T000038.md` — predates the V0
+  rebuild, and its six recommendations came from the template backlog since
+  replaced. Read as a dated record, not as guidance.
 
 ## Next recommended action
 
-- Run `liaison debrief --show` to generate ranked options.
+- Ack the 2026-08-28 debrief and run the Beta gate; all three Alpha exit
+  criteria are met and recorded with evidence in `PROJECT_PHASE.md`.
+- Do NOT run `liaison debrief` expecting new engineering options: the backlog
+  deliberately has no `recommended` entry, because both open items are blocked
+  on data and process rather than code.
 
 ## Built (closed slices)
 
