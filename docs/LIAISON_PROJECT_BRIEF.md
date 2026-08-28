@@ -21,8 +21,9 @@ A quantitative research platform whose design goal is not finding strategies but
 making the ones it finds believable. V0 is the research-integrity layer: a global
 trial counter, deflated Sharpe, a protected holdout, purged cross-validation, a
 point-in-time store, execution costs and capacity, and enforced run
-reproducibility. The finGuard Kelly/drawdown/simulator migration is **V1** input
-staged in `migration_inbox/`, not a current integration target.
+reproducibility. V1 (portfolio construction) is under way in `src/portfolio/`;
+the finGuard migration that fed it **completed 2026-08-28**, and the source is
+retired to `docs/superseded/finGuard/`.
 
 ---
 
@@ -38,12 +39,10 @@ python3 -m venv .venv
 # Acceptance criteria 4 and 5. Deterministic; seeds are fixed in the script.
 ```
 
-finGuard's own suite is V1 scope and is not run as part of this project's gate:
-
-```bash
-PYTHONPATH=migration_inbox/finGuard/src .venv/bin/python -m pytest migration_inbox/finGuard/tests/ -q
-# 23 tests; needs pandas, which the root requirements.txt no longer installs.
-```
+finGuard is retired and is not part of this project's gate. Its own 23 tests
+still pass from `docs/superseded/finGuard/`, which is a caution rather than a
+reassurance: thirteen defects were found in the code beneath them, including a
+sign inversion in the portfolio Kelly. Do not import from there.
 
 ---
 

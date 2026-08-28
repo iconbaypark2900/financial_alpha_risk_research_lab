@@ -126,6 +126,60 @@ def test_the_cost_and_capacity_table_matches_the_code(readme):
             f"| ${small_cap / 1e6:,.0f}m |") in readme
 
 
+def test_the_status_table_points_at_files_that_exist(readme):
+    """Every module named in the V0 table's `Where` column must be there.
+
+    The table is the first thing a reader trusts, and it claimed five shipped
+    components were "not started" for six commits. A row naming a module that
+    does not exist is the same error with the sign flipped, and unlike the
+    prose around it, it is checkable.
+    """
+    import re
+
+    table = readme.split("| Component | Status | Where |")[1].split("\n\n")[0]
+    rows = [line for line in table.splitlines()
+            if line.startswith("| ") and not line.startswith("|---")]
+    assert len(rows) >= 8, f"the V0 table has shrunk to {len(rows)} rows"
+
+    package = Path(__file__).resolve().parent.parent / "src" / "research_integrity"
+    checked = 0
+    for row in rows:
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        status, where = cells[1], cells[2]
+        for module in re.findall(r"`([A-Za-z_]+\.py)`", where):
+            assert (package / module).exists(), (
+                f"the table says {cells[0][:40]!r} lives in {module}, "
+                "which does not exist")
+            checked += 1
+        if where == "—":
+            assert "built" not in status, (
+                f"{cells[0][:40]!r} is marked {status!r} but names no module")
+    assert checked >= 8, "the table stopped naming modules; the check is vacuous"
+
+
+def test_the_defect_count_matches_the_table_that_lists_them(readme):
+    """The V1 section states a number and then tabulates the defects. They must
+    agree.
+
+    They did not: the table had thirteen rows while four separate documents said
+    "twelve", including this repository's own state file. Numbers stated in prose
+    drift exactly like numbers in tables, and this one drifted in the direction
+    of understating what was found.
+    """
+    words = {"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
+
+    table = readme.split("| defect | effect |")[1].split("\n\n")[0]
+    rows = [line for line in table.splitlines()
+            if line.startswith("| ") and not line.startswith("|---")]
+
+    claimed = [n for word, n in words.items() if f"**{word}" in readme]
+    assert len(claimed) == 1, (
+        f"expected exactly one spelled-out defect count in the README, "
+        f"found {claimed}")
+    assert claimed[0] == len(rows), (
+        f"the README claims {claimed[0]} defects and tabulates {len(rows)}")
+
+
 def test_the_v1_recovery_time_table_matches_both_formulas(readme):
     """The V1 section quotes the correct recovery times AND the wrong ones the
     migrated source produced. Both sides are recomputed here: a table that

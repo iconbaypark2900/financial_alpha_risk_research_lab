@@ -110,3 +110,42 @@ def test_the_superseded_specs_are_not_in_the_repository_root():
     assert not strays, (
         f"{strays} are back in the repository root. They are superseded by "
         "PRD 04; they belong in docs/superseded/ with the note explaining why.")
+
+
+def test_nothing_imports_the_retired_finguard_package():
+    """finGuard is retired to docs/superseded/ with thirteen known defects.
+
+    Its own 23 tests still pass from there, which is precisely why the directory
+    is a hazard rather than a resource: working-looking code with a sign
+    inversion in it, one import away. The replacements are in src/portfolio/.
+    """
+    import re
+
+    offenders = []
+    for area in ("src", "tests", "scripts"):
+        for path in (ROOT / area).rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            if re.search(r"^\s*(?:from|import)\s+finguard\b", source, re.MULTILINE):
+                offenders.append(str(path.relative_to(ROOT)))
+    assert not offenders, (
+        f"{offenders} import the retired finGuard package. Use src/portfolio/ — "
+        "the finGuard versions invert position signs and understate recovery "
+        "time by 41.5% at a 50% drawdown.")
+
+
+def test_the_migration_inbox_is_gone():
+    """It was an inbox with nothing left to deliver. Everything it held is
+    either superseded, rewritten, or deliberately out of scope."""
+    assert not (ROOT / "migration_inbox").exists(), (
+        "migration_inbox/ is back. finGuard was retired to "
+        "docs/superseded/finGuard/ on 2026-08-28.")
+
+
+def test_the_retired_finguard_carries_its_warning():
+    """A retired directory without a note explaining why is just an old
+    directory, and the next reader will treat it as a resource."""
+    note = ROOT / "docs" / "superseded" / "finGuard" / "RETIRED.md"
+    assert note.exists(), "docs/superseded/finGuard/RETIRED.md is missing"
+    text = note.read_text(encoding="utf-8")
+    assert "Do not import" in text
+    assert "thirteen defects" in text

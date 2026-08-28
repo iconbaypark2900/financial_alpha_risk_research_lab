@@ -11,22 +11,10 @@ version: 1
 # State at rewrite: V0 feature-complete, 249 tests passing, Alpha exit criteria
 # met. Everything below is scoped against PRD 04 rather than against a template.
 tasks:
-  - id: recommended
-    label: "Retire migration_inbox/finGuard/"
-    kind: recommended
-    score: 10
-    agents: ["codex", "spark-flow-closeout"]
-    why: >
-      V1's migration finished 2026-08-28 and the directory now holds nothing
-      this project wants. kelly.py and drawdown.py are superseded by
-      src/portfolio/; simulator.py was rewritten rather than migrated;
-      visualizer.py and app.py are deliberately out of scope as UI. Twelve
-      defects were found across the three modules, so the directory is also a
-      standing invitation to import from the wrong one. Move it to
-      docs/superseded/ or delete it — the same call already made about the
-      original spec, and for the same reason: an outdated artefact in a
-      prominent place does damage in proportion to how official it looks.
-
+  # No `recommended` engineering task remains. V0 is complete except FR-19's
+  # partial fills, which need order-book data nobody has; V1's migration closed
+  # 2026-08-28. Both items below are blocked on something other than code, and
+  # inventing a third to fill the slot would be how this file went wrong before.
   - id: near-2
     label: "Close FR-19's partial-fill half with order-book data"
     kind: near

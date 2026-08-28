@@ -46,6 +46,13 @@ and this is the spec it was built from.
   a closing tag and has no root element).
 - `financial_alpha_risk_research_lab_detailed.pdf` — not examined.
 
+## finGuard
+
+`finGuard/` was retired here on 2026-08-28 for the same reason, after its Kelly,
+drawdown and simulator modules were migrated into `src/portfolio/` and thirteen
+defects were found in them. See [finGuard/RETIRED.md](finGuard/RETIRED.md). Its
+own 23 tests still pass, which is the point rather than a reassurance.
+
 ## Where the real requirements are
 
 PRD 04 itself is **not in this repository** and is not reachable from it. Every

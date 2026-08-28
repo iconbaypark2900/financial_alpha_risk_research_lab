@@ -13,8 +13,8 @@ negative. See each module's docstring for what was wrong and what it cost.
 
 `simulator.py` is a REWRITE rather than a migration: its predecessor drove every
 path through both defective functions, shared one drawdown peak across all
-simulations, and measured returns against the terminal value of path 0. Twelve
-defects were found across the three modules in total.
+simulations, and measured returns against the terminal value of path 0.
+Thirteen defects were found across the three modules in total.
 """
 from .drawdown import (
     DrawdownError,

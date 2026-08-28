@@ -87,10 +87,10 @@ hand until it wasn't — and when it finally was, it failed.
 - **Multi-tenancy, OPA, Vault, RBAC.** This is an internal tool run by the team
   that trades the strategies; those controls purchase against a threat model that
   does not exist.
-- **Portfolio construction and risk analytics** — V1 (§5.5), now **started**
-  in `src/portfolio/`. Kelly sizing and drawdown control are migrated from
-  `migration_inbox/finGuard/`; the Monte Carlo simulator is not yet, and the
-  Streamlit UI will not be. See the V1 section below.
+- **Portfolio construction and risk analytics** — V1 (§5.5), **in
+  `src/portfolio/`**. Kelly sizing, drawdown control and Monte Carlo simulation
+  are all migrated or rewritten; the Streamlit UI is not, and will not be. The
+  finGuard source is retired to `docs/superseded/finGuard/`. See the V1 section.
 
 ## V1 — portfolio construction (§5.5)
 
@@ -116,7 +116,7 @@ architecture "Perfect" and rating its own gaps as LOW. The tests covered
 untested; `visualizer.py` (426 lines) is untested and does not even import,
 because it needs `plotly`, which is not a dependency here.
 
-Checking all three modules against their sources found this — **twelve
+Checking all three modules against their sources found this — **thirteen
 defects**, every one of which flatters the strategy:
 
 | defect | effect |
