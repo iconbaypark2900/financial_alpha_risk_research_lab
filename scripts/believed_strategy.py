@@ -213,7 +213,14 @@ def main() -> int:
               f"{'HELD' if drawdown_held else 'FAILED'}")
         print(f"    'Sharpe no worse than buy-and-hold less 0.05'    "
               f"{'HELD' if sharpe_held else 'FAILED'}")
-        print(f"    exhaustion status: {verdict.get('exhaustion_status', 'first look')}")
+        # `evaluations`, `exhausted` and `warning` — the keys evaluate() really
+        # returns. This read `verdict.get("exhaustion_status", "first look")`,
+        # a key that has never existed, so it printed "first look" however
+        # exhausted the holdout was: a silent misreport of the one control this
+        # script exists to demonstrate. A default that looks like an answer is
+        # worse than a KeyError.
+        print(f"    looks at this family: {verdict['evaluations']}")
+        print(f"    {verdict['warning'] or 'no exhaustion warning — first look'}")
         print()
         print("  WHAT THIS DOES AND DOES NOT LICENCE")
         print("    Both legs held out of sample, which is an uncommon result here")

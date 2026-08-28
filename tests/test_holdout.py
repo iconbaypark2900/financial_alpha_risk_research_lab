@@ -214,3 +214,39 @@ def test_a_backwards_period_is_refused(tmp_path):
     h = ProtectedHoldout(tmp_path / "x.db")
     with pytest.raises(ValueError, match="start < end"):
         h.define("ds", start="2024-12-31", end="2023-01-01")
+
+
+def test_evaluate_returns_the_exhaustion_keys_it_advertises(tmp_path):
+    """Pins the contract a caller reads.
+
+    scripts/believed_strategy.py read `exhaustion_status`, a key that has never
+    existed, with a default of "first look" — so it reported a fresh holdout
+    however exhausted the real one was. The bug was invisible because the
+    default was plausible. Every key a script depends on gets asserted here.
+    """
+    holdout = ProtectedHoldout(tmp_path / "h.db")
+    holdout.define("ds", start="2025-01-01", end="2025-12-31")
+
+    def look(n: int) -> dict:
+        reg = holdout.preregister(
+            "ds", strategy_family="fam",
+            hypothesis=f"variant {n} beats the benchmark on drawdown",
+            expected_result="max drawdown between 8% and 14%")
+        return holdout.evaluate(reg, observed={"max_drawdown": 0.10})
+
+    first = look(1)
+    assert set(first) >= {"evaluations", "exhausted", "warning"}
+    assert "exhaustion_status" not in first, (
+        "if this key is ever added, the scripts reading it must be revisited")
+    assert first["evaluations"] == 1
+    assert first["exhausted"] is False
+    assert not first["warning"]
+
+    second = look(2)
+    assert second["evaluations"] == 2
+    assert "EXHAUSTION" in second["warning"]
+
+    for n in (3, 4):
+        final = look(n)
+    assert final["exhausted"] is True
+    assert "EXHAUSTED" in final["warning"]

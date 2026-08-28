@@ -11,6 +11,8 @@
     run_record.py        enforced reproducibility (FR-22..FR-25)
     search.py            the trial harness and null benchmark (FR-16)
     study.py             the seam that makes the controls binding
+    workspace.py         the stores, persisted — a control that
+                         accumulates is absent if it is ephemeral
 
 Until study.py existed, three of the four controls constrained nothing: the
 holdout guard was called only by its own docstring, no code path wrote a run
@@ -96,6 +98,7 @@ from .search import (
     run_search,
 )
 from .study import ORDER, Study, StudyError
+from .workspace import Workspace, default_home
 from .trial_counter import TrialCounter, TrialCounterError
 from .core import (
     EULER_MASCHERONI,
@@ -107,6 +110,8 @@ from .core import (
 )
 
 __all__ = [
+    "Workspace",
+    "default_home",
     "ORDER",
     "Study",
     "StudyError",

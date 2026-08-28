@@ -44,6 +44,7 @@ from src.research_integrity.ingest import (  # noqa: E402
     vintage_facts,
 )
 from src.research_integrity.point_in_time import PointInTimeStore  # noqa: E402
+from src.research_integrity.workspace import Workspace  # noqa: E402
 from src.research_integrity.search import crossover_grid, null_benchmark  # noqa: E402
 
 DATA = ROOT / "data"
@@ -63,14 +64,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetch", action="store_true",
                         help="re-download from FRED and ALFRED")
+    parser.add_argument("--home", default=None,
+                        help="research workspace (default: $RESEARCH_LAB_HOME or "
+                             "~/.financial-alpha-research-lab). Persists the "
+                             "trial count, the holdout and the run log.")
+    parser.add_argument("--ephemeral", action="store_true",
+                        help="throwaway workspace — the old behaviour, which "
+                             "reset the global trial count on every run")
     args = parser.parse_args(argv)
 
     print(__doc__.strip().splitlines()[0])
     print()
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        store = PointInTimeStore(tmp / "facts.duckdb")
+    with tempfile.TemporaryDirectory() as scratch:
+        tmp = Path(scratch)
+        lab = Workspace.open(tmp / "lab" if args.ephemeral else args.home)
+        print(f"  WORKSPACE  {lab.describe()}")
+        if args.ephemeral:
+            print("             EPHEMERAL — the trial count resets when this exits")
+        print()
+        store = lab.store()
 
         # ---- FR-01, FR-06: real prices, immutably versioned ---------------
         prices_csv = _csv("SP500.csv", lambda: fetch_fred("SP500"),
@@ -108,12 +121,10 @@ def main(argv: list[str] | None = None) -> int:
               "store returns it only on request")
 
         # ---- the controls, attached -------------------------------------
-        holdout = ProtectedHoldout(tmp / "holdout.db")
-        holdout.define("sp500", start=HOLDOUT[0], end=HOLDOUT[1])
-        study = Study(dataset_id="sp500", store=store,
-                      counter=TrialCounter(tmp / "trials.db"),
-                      holdout=holdout,
-                      log=ExperimentLog(tmp / "runs.db", repo=ROOT))
+        holdout = lab.holdout()
+        if holdout.holdout_period("sp500") is None:
+            holdout.define("sp500", start=HOLDOUT[0], end=HOLDOUT[1])
+        study = lab.study("sp500", repo=ROOT)
         print(f"  FR-10    holdout {HOLDOUT[0]} to {HOLDOUT[1]}, protected")
 
         # ---- FR-08, FR-16: a counted search on real returns --------------
@@ -189,6 +200,14 @@ def main(argv: list[str] | None = None) -> int:
               f"hash {verified['result_hash'][:12]}...")
         print(f"           trial count {before:,} before, {after:,} after — a "
               "replay is verification, not new research")
+        print()
+        print(f"  WORKSPACE  {lab.describe()}")
+        if not args.ephemeral:
+            print("             this count accumulates across runs and "
+                  "researchers.")
+            print("             Deleting the directory resets it, and the age "
+                  "above is how")
+            print("             you would notice.")
     return 0
 
 

@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-435 tests pass, on every push. Two caveats the row labels are too small to hold:
+447 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 435 passed
+.venv/bin/python -m pytest -q                      # 447 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **329 of the 435 tests**; the point-in-time store and the engine
+alone and runs **338 of the 447 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -538,6 +538,63 @@ survivorship-adjusted composite, not a survivorship-free universe. Anyone
 reaching for a cross-section still needs vendor data nobody here has. The
 temptation is to treat "we have real data now" as having closed those
 requirements. It has not, and `docs/REQUIREMENTS.md` still says so.
+
+## The workspace: a control that accumulates is absent if it is ephemeral
+
+```bash
+python3 scripts/real_data_pipeline.py                    # persistent workspace
+python3 scripts/real_data_pipeline.py --ephemeral        # the old behaviour
+```
+
+FR-08 asks for "a global count of every backtest executed against each dataset,
+across all researchers and all time". The counter that implements it is
+append-only and refuses deletes by SQLite trigger — and every script here built
+it inside a `TemporaryDirectory` and destroyed it on exit.
+
+So the count reset to zero on every run. The deflated Sharpe was computed
+against one script's search intensity rather than the team's cumulative one,
+which is the smallest it could be and therefore the most flattering. Holdout
+exhaustion reset with it, so every run began with a fresh, never-peeked
+holdout — *"an exhaustion count you can reset is not a count"* is this project's
+own line, and it was being reset every few minutes.
+
+None of those controls were wrong. They were ephemeral, which for a control that
+works by **accumulating** is the same as being absent.
+
+### What persistence actually buys, measured
+
+The same pipeline, run twice against one workspace:
+
+| run | trials on record | deflated Sharpe |
+|---|---:|---:|
+| first | 2,691 | 0.1366 |
+| second | 5,382 | **0.1279** |
+
+The same search, on the same data, is **less impressive the second time** —
+because the counter remembered the first. That is the sentence at the top of
+this README finally being true of the system rather than of a formula:
+*searching harder makes it less impressive, without anyone having to choose to
+be honest.* Before persistence it could not happen, because every run started
+from zero.
+
+### A directory is the honest ceiling
+
+Nothing here can stop someone deleting the workspace. Triggers defend rows
+against SQL; they cannot defend a file against `rm`. So the workspace records
+when it was created and `provenance()` reports that age **beside** the count:
+
+```
+workspace ~/.financial-alpha-research-lab (0.0 days old): 5,382 trials …
+```
+
+A workspace claiming to have vetted a strategy family while being four hours old
+is visibly wrong in the report rather than silently wrong in the arithmetic.
+That is weaker than prevention, and it is what a file allows. Back it up, and
+treat deleting it the way you would treat deleting the trade blotter.
+
+The default home is `~/.financial-alpha-research-lab`, outside any checkout,
+because a workspace tied to a clone loses its accumulated count the first time
+someone clones fresh — the one number that must not reset.
 
 ## The seam: making the controls binding
 
