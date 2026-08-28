@@ -126,6 +126,25 @@ def test_the_cost_and_capacity_table_matches_the_code(readme):
             f"| ${small_cap / 1e6:,.0f}m |") in readme
 
 
+def test_the_v1_recovery_time_table_matches_both_formulas(readme):
+    """The V1 section quotes the correct recovery times AND the wrong ones the
+    migrated source produced. Both sides are recomputed here: a table that
+    contrasts a fix with the bug it replaced is only worth reading if both
+    columns are still accurate."""
+    import math
+
+    from src.portfolio.drawdown import recovery_time
+
+    rate = 0.10
+    for drawdown in (0.10, 0.20, 0.50):
+        correct = recovery_time(drawdown, rate)
+        wrong = math.log(1 + drawdown) / math.log(1 + rate)
+        understated = (1 - wrong / correct) * 100
+        row = (f"| {drawdown:.0%} | {correct:.3f} yr | {wrong:.3f} yr "
+               f"| {understated:.1f}% |")
+        assert row in readme, f"V1 recovery table is stale; expected {row!r}"
+
+
 def test_the_engine_sections_numbers_match_the_code(readme):
     """The engine section quotes concrete figures, so they get the same
     treatment as every other table on the page.

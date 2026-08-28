@@ -12,25 +12,20 @@ version: 1
 # met. Everything below is scoped against PRD 04 rather than against a template.
 tasks:
   - id: recommended
-    label: "V1 — portfolio construction, starting by verifying finGuard's math"
+    label: "Verify or drop finGuard's Monte Carlo simulator"
     kind: recommended
-    score: 15
-    agents: ["hermes", "codex", "testing-hardening"]
+    score: 14
+    agents: ["codex", "testing-hardening"]
     why: >
-      The next buildable phase. FR-19 is data-gated, so this is what is actually
-      unblocked. migration_inbox/finGuard/ holds Kelly, drawdown, a Monte Carlo
-      simulator and a Plotly visualiser. The "23 tests green" in the liaison
-      brief is true and misleading: those tests cover kelly.py and drawdown.py
-      (302 lines); simulator.py (231 lines) is untested, and visualizer.py (426
-      lines) is untested AND does not import — it needs plotly, which is not a
-      dependency here. Two thirds of the code is unverified.
-      Do NOT start from finGuard's todo.md: it is AI-generated self-assessment
-      ("Excellent Scaffolding", "Perfect modular architecture") rating its own
-      gaps as LOW, with exactly the standing the NautilusTrader docstring had.
-      Start by checking Kelly and drawdown against their sources the way core.py
-      was checked against Bailey and Lopez de Prado. Drop visualizer.py and
-      app.py rather than migrating them: a Streamlit UI is not portfolio
-      construction, and the README declines UI work for an internal tool.
+      The last unmigrated piece of V1. simulator.py is 231 lines with no tests
+      and has never been checked. That matters more than it would normally,
+      because checking its two tested siblings against their sources turned up
+      nine defects in 302 lines — including a sign inversion in the portfolio
+      Kelly and a recovery-time formula understating the wait by 41.5% at a 50%
+      drawdown. The 23 tests that shipped with finGuard caught none of them.
+      Assume nothing about the untested module on the strength of the tested
+      ones. visualizer.py and app.py are NOT to be migrated: a Plotly/Streamlit
+      UI is not portfolio construction.
 
   - id: near-2
     label: "Close FR-19's partial-fill half with order-book data"

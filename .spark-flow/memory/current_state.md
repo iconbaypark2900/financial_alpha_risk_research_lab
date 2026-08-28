@@ -18,15 +18,24 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **248 tests pass** (`.venv/bin/python -m pytest -q`).
+- **319 tests pass** (`.venv/bin/python -m pytest -q`).
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
   they need order-book depth this project has no data for, and the limitation is
   pinned by a test rather than left to be discovered.
-- Outstanding, in rough priority order: order-book data to close FR-19; the
-  MLflow-vs-SQLite decision below; then V1 (portfolio construction, the finGuard
-  material in `migration_inbox/`).
+- **V1 has started** (2026-08-28). `src/portfolio/` holds Kelly sizing and
+  drawdown control, migrated from finGuard formula by formula against Kelly
+  (1956), Thorp (2006) and Martin & McCann (1989). Nine defects were found in
+  the 302 lines that shipped with 23 passing tests, including a SIGN INVERSION
+  in the portfolio Kelly (dividing by a negative weight sum flipped every
+  position) and a recovery-time formula understating the wait by 41.5% at a 50%
+  drawdown. Each has a regression test named after it.
+- The MLflow-vs-SQLite divergence is RATIFIED (see decisions.md): SQLite stays,
+  because FR-23 requires enforced reproducibility and MLflow only logs.
+- Outstanding: finGuard's `simulator.py` (231 lines, untested, unchecked);
+  order-book data to close FR-19; the Beta gate. `visualizer.py` and `app.py`
+  are deliberately not being migrated.
 - The factor library landed 2026-08-28: `factors.py`, five factors, each tested
   against hand-derived values, plus `assert_causal` — a mechanical look-ahead
   check that perturbs the future and requires the past not to move. It composes

@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-248 tests pass. Two caveats the row labels are too small to hold:
+319 tests pass. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest -q                      # 248 passed
+.venv/bin/python -m pytest -q                      # 319 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -81,8 +81,91 @@ Verified on CPython 3.14. `nautilus_trader` is the heaviest line in
 - **Multi-tenancy, OPA, Vault, RBAC.** This is an internal tool run by the team
   that trades the strategies; those controls purchase against a threat model that
   does not exist.
-- **Portfolio construction and risk analytics** — V1 (§5.5). Prior work staged in
-  `migration_inbox/finGuard/` is the input to that phase, not to V0.
+- **Portfolio construction and risk analytics** — V1 (§5.5), now **started**
+  in `src/portfolio/`. Kelly sizing and drawdown control are migrated from
+  `migration_inbox/finGuard/`; the Monte Carlo simulator is not yet, and the
+  Streamlit UI will not be. See the V1 section below.
+
+## V1 — portfolio construction (§5.5)
+
+`src/portfolio/` is a separate package from `research_integrity` because the two
+answer different questions. The research-integrity layer asks whether a result
+is believable; this layer asks how much to bet on one. **Nothing here is a
+control**, and none of it should be mistaken for one.
+
+```python
+from src.portfolio import portfolio_kelly, risk_metrics, recovery_time
+
+allocation = portfolio_kelly([0.10, 0.05], cov, risk_free_rate=0.02)
+allocation.weights          # absolute exposure, NOT normalised to 1
+allocation.cash_weight      # the remainder; negative means levered
+allocation.scaled()         # half-Kelly, the size anyone should actually trade
+```
+
+### It was migrated formula by formula, not module by module
+
+finGuard arrived with **23 passing tests** and a `todo.md` calling its
+architecture "Perfect" and rating its own gaps as LOW. The tests covered
+`kelly.py` and `drawdown.py` — 302 of 968 lines. `simulator.py` (231 lines) is
+untested; `visualizer.py` (426 lines) is untested and does not even import,
+because it needs `plotly`, which is not a dependency here.
+
+Checking the two tested modules against their sources found this:
+
+| defect | effect |
+|---|---|
+| Portfolio Kelly divided by the sum of the weights | **Sign inversion** whenever that sum was negative |
+| …then normalised the result to sum to 1 | Discarded the leverage — the only quantity Kelly computes |
+| …and ignored the risk-free rate | `self.risk_free_rate = 0.02` was set in `__init__` and read by nothing |
+| `calculate_recovery_time` used `log(1+x)` | Understates recovery by **41.5%** at a 50% drawdown |
+| `calculate_growth_rate` at `p = 1` | Returned `nan`, which compares False against everything |
+| Singular covariance | Silently returned equal weights |
+| `get_risk_metrics` | Annualised volatility beside a per-period Sharpe, in one dict |
+| `calculate_var_drawdown` | A one-period VaR named as a drawdown limit |
+| `kelly_leverage_adjustment` | Dead code — capped at 2.0 downstream of a cap at 1.0 |
+
+**The sign inversion is the one worth dwelling on.** For `mu = [-0.10, 0.02]`
+and `S = diag(0.04, 0.01)`, Kelly says short the first (−2.5) and hold the
+second (+2.0). The raw weights sum to −0.5; dividing by that flips both signs,
+and after clipping and renormalising finGuard returned `[1.0, 0.0]` — fully long
+the asset it was told to short, nothing in the one it was told to buy. Wrong on
+both legs, from one unguarded division, and none of the 23 tests saw it.
+
+**The recovery-time error is the instructive one**, because it needs no
+finance to catch. A 50% drawdown requires a 100% gain, so at 10% a year the
+answer is `log(2)/log(1.1)` = 7.27 years. finGuard reported 4.25. One line of
+arithmetic settles it, and the error ran in the flattering direction:
+
+| drawdown | correct | finGuard | understated by |
+|---:|---:|---:|---:|
+| 10% | 1.105 yr | 1.000 yr | 9.5% |
+| 20% | 2.341 yr | 1.913 yr | 18.3% |
+| 50% | 7.273 yr | 4.254 yr | 41.5% |
+
+Every defect above has a test named after it, because the useful residue of a
+fixed bug is the test that stops it returning.
+
+### Kelly returns an exposure, not a direction
+
+`portfolio_kelly` gives `w* = inv(S) @ (mu - r·1)` and **does not normalise**.
+Weights summing to 0.3 mean 30% invested and 70% in cash; summing to 7.5 means
+650% borrowed. `cash_weight` carries the remainder and goes negative exactly
+when the allocation is levered. Normalising converts a sizing rule into a
+direction, and sizing is the only reason to use Kelly at all.
+
+There is **no long-only option**. Clipping negative weights and renormalising is
+not the constrained solution — it is a different portfolio with no optimality
+property, and it is precisely where the sign inversion came from. The real
+problem is a QP and needs a solver this project does not depend on, so it is
+absent rather than approximated. Same call FR-14 makes about naive k-fold: the
+wrong path does not get offered behind a flag.
+
+### What is not migrated
+
+`simulator.py` (Monte Carlo, 231 lines) has no tests and has not been checked.
+`visualizer.py` and `app.py` are **not being migrated at all** — a 426-line
+Plotly/Streamlit UI is not portfolio construction, and this README already
+declines UI work for an internal tool.
 
 ## History
 
