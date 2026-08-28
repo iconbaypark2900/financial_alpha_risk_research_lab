@@ -10,6 +10,13 @@
     execution_costs.py   impact, borrow, capacity (FR-17, FR-18, FR-20)
     run_record.py        enforced reproducibility (FR-22..FR-25)
     search.py            the trial harness and null benchmark (FR-16)
+    study.py             the seam that makes the controls binding
+
+Until study.py existed, three of the four controls constrained nothing: the
+holdout guard was called only by its own docstring, no code path wrote a run
+record, and FR-07's refusal was never triggered by a caller. Each was correct
+and each was unreachable. `Study` is the supported way to run a backtest, and
+it invokes them in an order where the refusals come first.
 
 The formulas in core.py are implemented as published and verified against their
 source papers' worked examples. See that module's provenance note — the first
@@ -88,6 +95,7 @@ from .search import (
     null_benchmark,
     run_search,
 )
+from .study import ORDER, Study, StudyError
 from .trial_counter import TrialCounter, TrialCounterError
 from .core import (
     EULER_MASCHERONI,
@@ -99,6 +107,9 @@ from .core import (
 )
 
 __all__ = [
+    "ORDER",
+    "Study",
+    "StudyError",
     "AlmgrenFeeModel",
     "LookAheadAudit",
     "LookAheadDetected",

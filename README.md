@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-389 tests pass, on every push. Two caveats the row labels are too small to hold:
+406 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 389 passed
+.venv/bin/python -m pytest -q                      # 406 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **329 of the 389 tests**; the point-in-time store and the engine
+alone and runs **329 of the 406 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -381,6 +381,79 @@ through adjacency even when the windows do not touch.
 There is no option to disable purging. FR-14 says naive k-fold must not be
 offered, and a flag would be exactly that with an extra step — the leaky path
 would become the one people take when the honest numbers disappoint.
+
+## The seam: making the controls binding
+
+Every control in this package worked, was tested, and — for three of the four —
+constrained nothing:
+
+```
+who calls the holdout guard?           nobody, outside its own docstring
+who writes a run record?               nobody
+who requires a point-in-time dataset?  nobody
+what was actually wired?               the trial counter, into search and backtest
+```
+
+FR-10 says the holdout MUST be inaccessible to ordinary backtests, and nothing
+made an ordinary backtest check. FR-07 says the system MUST REFUSE a dataset
+that cannot supply point-in-time semantics; `require_point_in_time` implements
+that refusal exactly, and no caller ever triggered it. FR-22 through FR-25
+describe a run record that no code path wrote.
+
+That is this README's own argument turned on itself. It says of the trial
+counter that *"a researcher who can delete rows can manufacture any deflated
+Sharpe they want, and 'please don't' is not a control."* A control nobody
+invokes is the same thing with an extra step.
+
+```python
+from src.research_integrity import Study
+
+study = Study(dataset_id="sp500", store=store, counter=counter,
+              holdout=holdout, log=log)
+
+study.search(returns, grid, start="2015-01-01", end="2019-12-31")
+study.status()      # trials counted, holdout period, dataset version, runs recorded
+```
+
+**The order is the design**, and `ORDER` states it:
+
+| # | step | requirement |
+|---|---|---|
+| 1 | refuse a dataset that is not point-in-time | FR-07 |
+| 2 | refuse a range overlapping the protected holdout | FR-10 |
+| 3 | resolve the dataset version, or refuse | FR-06 |
+| 4 | refuse uncommitted code, or record the diff | FR-24 |
+| 5 | count the trial, before it can succeed | FR-08 |
+| 6 | run | |
+| 7 | record the outcome, including failure | FR-25 |
+
+Refusals come first so a run that must not happen never touches the counter —
+FR-08 counts backtests *executed*, and one refused at the door was not. Every
+argument is required: a `Study` missing a control is a study with that control
+switched off, which is the state the class exists to prevent.
+
+### A test that catches an orphaned control
+
+The reason three controls sat unreachable while all their tests passed is that a
+suite organised per-module cannot see it — every module is exercised by its own
+file, and the gap is in the space *between* them. So there is now a test that
+asserts each control has a caller outside its defining module:
+
+```
+FR-10: nothing outside holdout.py calls '.assert_ordinary_access('. The control
+exists, its own tests pass, and it constrains nothing.
+```
+
+That is its output when the wiring is removed, which is how it was verified.
+
+### What it does not do
+
+The date range is **declared by the caller**, not derived from the data handed
+over. A caller who reads holdout dates and declares a different range defeats the
+FR-10 check. Closing that needs the study to load prices from the store itself,
+which needs a price-shaped read the fact table does not yet offer. This makes the
+honest path easy and the dishonest path deliberate, which is weaker than
+impossible — and is stated here rather than left to be discovered.
 
 ## Point-in-time data store (FR-01, FR-02, FR-06, FR-07)
 
