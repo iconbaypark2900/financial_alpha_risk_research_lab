@@ -116,6 +116,11 @@ to move a value factor between deciles. `series()` returns the first report
 however many times it was revised; the revision needs
 `acknowledge_contamination=True`.
 
+**FR-23 now covers the data too.** A run re-executing against a live API is not
+reproducible however well its seeds were recorded. `mirror.py` downloads the
+bulk EDGAR archive once, hashes it, and reads offline thereafter, so a run
+record can name a specific 1,407,496,523-byte file by digest rather than a URL.
+
 **FR-23 is enforced, not asserted.** `replay()` restores the recorded seeds,
 re-executes, and compares a canonical hash against the one stored at the time; a
 test consumes an unrecorded random source and requires the replay to catch it.

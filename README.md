@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-476 tests pass, on every push. Two caveats the row labels are too small to hold:
+495 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 476 passed
+.venv/bin/python -m pytest -q                      # 495 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 476 tests**; the point-in-time store and the engine
+alone and runs **338 of the 495 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -548,6 +548,61 @@ free after all, from a source with a property no price feed has.
 describes; `filed` is the day it reached the wire. As-first-reported is a
 property of the data rather than a reconstruction — and a period appearing in
 more than one filing is a restatement with the real revision and the real lag.
+
+### The bulk mirror: data as a versioned artefact
+
+```python
+from src.research_integrity.mirror import Mirror, COMPANY_FACTS
+
+mirror = Mirror.fetch(COMPANY_FACTS, "~/lab/mirrors/companyfacts.zip",
+                      contact="you@example.com")
+mirror.version_id()        # 'companyfacts.zip@314ebb3149c96c98'
+mirror.read_cik(320193)    # offline. No API, no rate limit, no request.
+```
+
+**FR-23 requires a past run to be re-executable.** A run whose data came from a
+live endpoint is not, and the record cannot say otherwise: the endpoint can
+restate a figure, change a schema or disappear, and the seeds would still
+restore and the code SHA still match while the answer changed. The pipeline was
+already caching CSVs into `data/` as a side effect of not wanting to
+re-download — that worked by luck, recorded no hash, and let two runs read
+different bytes from one path while claiming the same version.
+
+One download, hashed once:
+
+```
+1,407,496,523 bytes in 226s     20,281 companies
+sha256 314ebb3149c96c98ecae144178a1d1699a06509d50453a785d8d175dd47d5932
+```
+
+The digest is what a run record names, so FR-06's "the exact version it used"
+means a specific file whose contents can be checked rather than a URL that used
+to return something. It is also the licence-clean option: EDGAR is a US
+Government work and therefore public domain under 17 U.S.C. §105, and after the
+download there is no third party in the loop at all.
+
+### How much is FR-02 actually worth? 38.3%
+
+With the archive local, the question becomes askable at scale. Of the first
+2,000 entries scanned, **1,491 filed stockholders' equity in a 10-K, and 571 of
+them — 38.3% — later restated at least one period.**
+
+More than a third of filers revise the number. A factor computed from today's
+data uses a revised figure for over a third of the universe, and Apple's revision
+was 13.68%. That is the size of the thing `as-first-reported` is protecting
+against, measured rather than argued.
+
+*(The first 2,000 archive entries in CIK order, not a random sample.)*
+
+### What it caught in my own reasoning
+
+I claimed the archive entries were "the same JSON format the API returns" — on
+the strength of the **filenames** inside the ZIP. They are not: the API returns
+one tag with its units at the top level, while the bulk archive nests every tag
+under `facts[taxonomy][tag]`. Apple carries 503 `us-gaap` tags in one entry. The
+mirror failed on its first real read, because checking a filename is not checking
+the content. One parser now handles both shapes, since the records themselves
+*are* identical.
 
 ### FR-02, on a revision that would change a decile
 

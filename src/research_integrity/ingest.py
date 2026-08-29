@@ -297,7 +297,8 @@ def fetch_edgar_submissions(cik: int, **kwargs) -> str:
 
 
 def concept_facts(payload: str, *, entity_id: str, field: str,
-                  unit: str = "USD",
+                  unit: str = "USD", tag: str | None = None,
+                  taxonomy: str = "us-gaap",
                   forms: Sequence[str] = ("10-K", "10-Q")) -> list[dict[str, Any]]:
     """XBRL company-concept records as facts, as first reported.
 
@@ -323,6 +324,31 @@ def concept_facts(payload: str, *, entity_id: str, field: str,
         data = json.loads(payload)
     except ValueError as exc:
         raise IngestError(f"{entity_id}: not valid JSON from EDGAR") from exc
+
+    # TWO SHAPES, ONE PARSER. The companyconcept API returns one tag with its
+    # units at the top level; the bulk companyfacts archive nests every tag
+    # under facts[taxonomy][tag]. The RECORDS are identical in both — same end,
+    # filed, val, form, accn — so a caller should not have to know which
+    # endpoint the bytes came from.
+    #
+    # This was asserted to be the same format on the strength of the filenames
+    # in the archive, and it is not. Checking the filename is not checking the
+    # content, and the bulk mirror failed on its first real read because of it.
+    if "facts" in data and "units" not in data:
+        if tag is None:
+            raise IngestError(
+                f"{entity_id}: this is a companyfacts payload with "
+                f"{sum(len(v) for v in data['facts'].values()):,} tags; pass "
+                "tag= to say which one")
+        taxonomies = data.get("facts", {})
+        for taxonomy_name in (taxonomy, *(k for k in taxonomies if k != taxonomy)):
+            concept = taxonomies.get(taxonomy_name, {}).get(tag)
+            if concept is not None:
+                data = concept
+                break
+        else:
+            raise IngestError(
+                f"{entity_id}: no tag {tag!r} in taxonomies {sorted(taxonomies)}")
 
     units = data.get("units", {})
     if unit not in units:
@@ -384,3 +410,14 @@ def listing_status(payload: str) -> dict[str, Any]:
         "last_filing": max(dates) if dates else None,
         "sic_description": data.get("sicDescription"),
     }
+
+
+def available_tags(payload: str, taxonomy: str = "us-gaap") -> list[str]:
+    """Every concept a companyfacts payload carries. Apple has 503 in us-gaap."""
+    import json
+
+    try:
+        data = json.loads(payload)
+    except ValueError as exc:
+        raise IngestError("not valid JSON from EDGAR") from exc
+    return sorted(data.get("facts", {}).get(taxonomy, {}))

@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **476 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **495 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -113,6 +113,11 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   `store.non_positive()` now screens for at load; and 88% ragged dates, handled
   with NaN rather than forward-fill. Cross-sectional momentum scored +0.01361
   against +0.06118 for equal-weighting — five times worse than doing nothing.
+- **The EDGAR bulk archive is mirrored** at
+  `~/.financial-alpha-research-lab/mirrors/companyfacts.zip` — 1,407,496,523
+  bytes, 20,281 companies, sha256 314ebb31...  Reads are offline; the digest is
+  what a run record names, so FR-23 covers the DATA and not just the code.
+  Measured with it: 38.3% of filers restate a period of stockholders' equity.
 - **FR-03 moved to PARTIAL via SEC EDGAR** (2026-08-28). EDGAR retains delisted
   companies (BBBY returns full history, empty tickers, post-bankruptcy name) and
   carries both `end` and `filed` on every record, so as-first-reported is a

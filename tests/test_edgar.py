@@ -194,3 +194,74 @@ def test_a_contact_address_is_required():
         fetch_edgar("https://data.sec.gov/x", contact="")
     with pytest.raises(IngestError, match="condition of use"):
         fetch_edgar("https://data.sec.gov/x", contact="not-an-email")
+
+
+# --- the bulk archive has a different shape, which I asserted it did not ----
+
+COMPANYFACTS = json.dumps({
+    "cik": 320193, "entityName": "Apple Inc.",
+    "facts": {
+        "us-gaap": {
+            "StockholdersEquity": {"label": "Stockholders' Equity", "units": {"USD": [
+                {"end": "2009-09-26", "val": 27832000000, "form": "10-K",
+                 "filed": "2009-10-27", "accn": "a"},
+                {"end": "2009-09-26", "val": 31640000000, "form": "10-K",
+                 "filed": "2010-10-27", "accn": "b"}]}},
+            "Assets": {"units": {"USD": [
+                {"end": "2009-09-26", "val": 47501000000, "form": "10-K",
+                 "filed": "2009-10-27", "accn": "a"}]}},
+        },
+        "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+            {"end": "2009-09-26", "val": 900000000, "form": "10-K",
+             "filed": "2009-10-27", "accn": "a"}]}}},
+    }})
+
+
+def test_the_bulk_archive_shape_is_read_by_the_same_parser():
+    """The companyconcept API returns one tag with units at the top level; the
+    bulk companyfacts archive nests every tag under facts[taxonomy][tag].
+
+    These were asserted to be the same format on the strength of the FILENAMES
+    in the archive, and they are not. The bulk mirror failed on its first real
+    read because checking a filename is not checking the content. The records
+    are identical in both, so one parser handles both shapes.
+    """
+    facts = concept_facts(COMPANYFACTS, entity_id="AAPL", field="book_equity",
+                          tag="StockholdersEquity", forms=("10-K",))
+    assert len(facts) == 2
+    assert facts[0]["value"] == pytest.approx(27832000000)
+    assert facts[0]["knowledge_date"] == "2009-10-27"
+
+
+def test_the_api_shape_still_works_without_a_tag():
+    """The narrow payload needs no tag, because it only holds one."""
+    facts = concept_facts(CONCEPT, entity_id="AAPL", field="book_equity",
+                          forms=("10-K",))
+    assert facts
+
+
+def test_a_bulk_payload_without_a_tag_says_what_to_do():
+    with pytest.raises(IngestError, match="pass tag="):
+        concept_facts(COMPANYFACTS, entity_id="AAPL", field="x")
+
+
+def test_an_unknown_tag_names_the_taxonomies_it_looked_in():
+    with pytest.raises(IngestError, match="us-gaap"):
+        concept_facts(COMPANYFACTS, entity_id="AAPL", field="x",
+                      tag="NoSuchConcept")
+
+
+def test_a_tag_outside_the_default_taxonomy_is_still_found():
+    """dei holds shares outstanding, which a market cap needs."""
+    facts = concept_facts(COMPANYFACTS, entity_id="AAPL", field="shares",
+                          tag="EntityCommonStockSharesOutstanding",
+                          unit="shares", forms=("10-K",))
+    assert facts[0]["value"] == pytest.approx(900000000)
+
+
+def test_available_tags_lists_what_a_company_filed():
+    from src.research_integrity.ingest import available_tags
+
+    assert available_tags(COMPANYFACTS) == ["Assets", "StockholdersEquity"]
+    assert available_tags(COMPANYFACTS, taxonomy="dei") == [
+        "EntityCommonStockSharesOutstanding"]
