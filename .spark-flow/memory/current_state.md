@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **447 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **451 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -92,6 +92,14 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   never existed, with a plausible default — so it reported "first look" however
   exhausted the holdout was. A contract test now pins the keys evaluate()
   returns.
+- A workspace is **installed** at `~/.financial-alpha-research-lab` with the
+  real FRED/ALFRED data and the holdout defined, zero trials — via
+  `scripts/install_workspace.py`, which is separate from the demos so a
+  2,691-trial demonstration sweep is not baked into the global count forever.
+- `believed_strategy.py` now persists too; four runs walk the holdout from first
+  look to EXHAUSTED. `null_benchmark_demo.py` and `readme_tables.py` stay
+  ephemeral deliberately (their output is asserted by the README tests) and a
+  test pins that split in both directions.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on

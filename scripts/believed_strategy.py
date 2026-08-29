@@ -32,8 +32,8 @@ number.
 """
 from __future__ import annotations
 
+import argparse
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +50,7 @@ from src.research_integrity import (  # noqa: E402
     deflated_sharpe_ratio,
 )
 from src.research_integrity.ingest import fetch_fred, load, price_facts  # noqa: E402
-from src.research_integrity.point_in_time import PointInTimeStore  # noqa: E402
+from src.research_integrity.workspace import Workspace  # noqa: E402
 from src.research_integrity.search import moving_average_timing  # noqa: E402
 
 DATA = ROOT / "data" / "SP500.csv"
@@ -72,7 +72,16 @@ def summarise(returns: np.ndarray) -> dict[str, float]:
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--home", default=None,
+                        help="research workspace (default: $RESEARCH_LAB_HOME or "
+                             "~/.financial-alpha-research-lab)")
+    parser.add_argument("--ephemeral", action="store_true",
+                        help="throwaway workspace — resets the holdout, which "
+                             "is the thing this script is about")
+    args = parser.parse_args(argv)
+
     print(__doc__.strip().splitlines()[0])
     print()
 
@@ -80,19 +89,37 @@ def main() -> int:
         DATA.parent.mkdir(exist_ok=True)
         DATA.write_text(fetch_fred("SP500"), encoding="utf-8")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        store = PointInTimeStore(tmp / "facts.duckdb")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        # THE HOLDOUT MUST PERSIST, or this script is a lie about itself.
+        # It built its holdout in a TemporaryDirectory while printing "the
+        # registration is spent" — and the next run got a fresh, unspent one.
+        # The demonstration of exhaustion was the thing defeating exhaustion.
+        lab = Workspace.open(Path(scratch) / "lab" if args.ephemeral
+                             else args.home)
+        print(f"  WORKSPACE  {lab.describe()}")
+        if args.ephemeral:
+            print("             EPHEMERAL — the holdout resets when this exits,")
+            print("             so 'the registration is spent' will not be true")
+        print()
+
+        store = lab.store()
         load(store, "sp500", price_facts(DATA.read_text(encoding="utf-8"),
                                          entity_id="SP500"),
              description="FRED SP500 daily close")
 
-        holdout = ProtectedHoldout(tmp / "holdout.db")
-        holdout.define("sp500", start=HOLDOUT_START, end=HOLDOUT_END)
-        study = Study(dataset_id="sp500", store=store,
-                      counter=TrialCounter(tmp / "trials.db"),
-                      holdout=holdout,
-                      log=ExperimentLog(tmp / "runs.db", repo=ROOT))
+        holdout = lab.holdout()
+        if holdout.holdout_period("sp500") is None:
+            holdout.define("sp500", start=HOLDOUT_START, end=HOLDOUT_END)
+        study = lab.study("sp500", repo=ROOT)
+
+        prior = holdout.exhaustion("sp500", "faber-ma-timing")
+        if prior["evaluations"]:
+            print(f"  ALREADY LOOKED  this family has been evaluated against "
+                  f"this holdout {prior['evaluations']} time(s) before.")
+            print(f"  {prior['warning']}")
+            print()
 
         # ---- PRE-REGISTER, before looking at anything -------------------
         registration = study.preregister(
@@ -221,6 +248,9 @@ def main() -> int:
         # worse than a KeyError.
         print(f"    looks at this family: {verdict['evaluations']}")
         print(f"    {verdict['warning'] or 'no exhaustion warning — first look'}")
+        if verdict["exhausted"]:
+            print("    This holdout is now in-sample for this family. Any")
+            print("    further variant needs a fresh period, not another look.")
         print()
         print("  WHAT THIS DOES AND DOES NOT LICENCE")
         print("    Both legs held out of sample, which is an uncommon result here")

@@ -12,6 +12,14 @@ until this script was written, and nothing complained.
 So the tables are generated rather than transcribed, every input is stated in
 the output rather than living in someone's shell history, and
 `tests/test_readme_is_true.py` fails when the README and this script disagree.
+
+NOTE ON THE TEMPORARY COUNTERS BELOW — DO NOT "FIX" THEM
+
+Same reason as scripts/null_benchmark_demo.py: this script GENERATES the
+README's tables and tests/test_readme_is_true.py recomputes them. It must be a
+pure function of its seeds, so its counters are deliberately thrown away. A
+persistent workspace here would make the documentation drift every time anyone
+ran anything.
 """
 from __future__ import annotations
 

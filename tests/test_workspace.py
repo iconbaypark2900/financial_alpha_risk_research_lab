@@ -167,3 +167,35 @@ def test_the_workspace_builds_a_study_on_its_own_stores(lab, tmp_path):
     study = lab.study("ds", repo=tmp_path)
     assert study.counter.db_path == str(lab.trials_path)
     assert study.dataset_id == "ds"
+
+
+def test_the_demo_scripts_stay_ephemeral_on_purpose():
+    """A guard against a well-meant "fix".
+
+    null_benchmark_demo.py and readme_tables.py build their counters in a
+    TemporaryDirectory deliberately: their output is pinned by
+    tests/test_readme_is_true.py, so a persistent counter would make the
+    deflated Sharpe drift every run and the documentation tests would fail for
+    a reason unrelated to correctness. The workspace commit makes the opposite
+    look like an oversight, so the reason is written into both files and
+    asserted here.
+    """
+    for name in ("null_benchmark_demo.py", "readme_tables.py"):
+        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert "TemporaryDirectory" in source, f"{name} lost its temp counter"
+        assert "DO NOT \"FIX\" THEM" in source, (
+            f"{name} must explain why its counters are deliberately thrown away")
+        assert "Workspace" not in source, (
+            f"{name} must not use the persistent workspace; its output is "
+            "asserted by the README tests and would drift")
+
+
+def test_the_research_scripts_do_use_the_workspace():
+    """The other direction. believed_strategy.py printed "the registration is
+    spent" while building its holdout in a TemporaryDirectory, so the next run
+    got a fresh, unspent one — the demonstration of exhaustion was the thing
+    defeating exhaustion."""
+    for name in ("real_data_pipeline.py", "believed_strategy.py",
+                 "install_workspace.py"):
+        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert "Workspace" in source, f"{name} must persist its controls"

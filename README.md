@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-447 tests pass, on every push. Two caveats the row labels are too small to hold:
+451 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 447 passed
+.venv/bin/python -m pytest -q                      # 451 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 447 tests**; the point-in-time store and the engine
+alone and runs **338 of the 451 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -595,6 +595,49 @@ treat deleting it the way you would treat deleting the trade blotter.
 The default home is `~/.financial-alpha-research-lab`, outside any checkout,
 because a workspace tied to a clone loses its accumulated count the first time
 someone clones fresh — the one number that must not reset.
+
+### Installing one
+
+```bash
+python3 scripts/install_workspace.py            # load data, define the holdout
+python3 scripts/install_workspace.py --status   # report, change nothing
+```
+
+Installation is **separate from the demos on purpose**. Seeding a workspace by
+running `real_data_pipeline.py` would work and would be wrong: that script
+executes a 2,691-trial sweep, those are real searches against the dataset, and
+FR-08 requires counting them. Every genuine result anyone later produced against
+`sp500` would be deflated against 2,691 trials nobody had an interest in — a
+permanent, invisible tax on the count, paid for a demonstration.
+
+So the installer loads data, registers the datasets and defines the holdout, and
+runs no search. It is idempotent: ingestion skips a load whose content hash
+already exists, so repeating it does not accumulate identical versions or make
+two runs over the same data cite different ones.
+
+A fresh workspace has a trial count of zero because nothing has been searched —
+not because nothing persists.
+
+### Which scripts persist, and which must not
+
+| script | workspace | why |
+|---|---|---|
+| `install_workspace.py` | **persistent** | it is the installation |
+| `real_data_pipeline.py` | **persistent** | real searches must accumulate |
+| `believed_strategy.py` | **persistent** | its subject is holdout exhaustion |
+| `null_benchmark_demo.py` | **ephemeral** | output pinned by the README tests |
+| `readme_tables.py` | **ephemeral** | it *generates* the README tables |
+
+`believed_strategy.py` was on the wrong side of that line until now. It printed
+*"the registration is spent"* while building its holdout in a temporary
+directory, so the next run got a fresh, unspent one — the demonstration of
+exhaustion was the thing defeating exhaustion. Four consecutive runs now walk it
+from `first look` to `HOLDOUT EXHAUSTED`, which is what that output was
+describing all along.
+
+The two ephemeral ones are deliberate and say so in their own docstrings, with a
+test asserting they keep saying it — the workspace change makes their temp
+directories look like an oversight, and they are not.
 
 ## The seam: making the controls binding
 

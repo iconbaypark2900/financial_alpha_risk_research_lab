@@ -16,6 +16,19 @@ this trial count.
 If the two raw Sharpes are comparable, the raw Sharpe is measuring how hard you
 searched rather than what you found. The deflated Sharpe is what tells them
 apart, and it can only do that because every trial was counted.
+
+NOTE ON THE TEMPORARY COUNTERS BELOW — DO NOT "FIX" THEM
+
+This demo builds its trial counters in a TemporaryDirectory deliberately, and it
+must keep doing so. Its output is pinned by tests/test_readme_is_true.py: the
+figures it prints appear in the README and are asserted there. A persistent
+counter would make the deflated Sharpe drift on every run as the trial count
+grew, and those tests would fail for a reason that has nothing to do with
+correctness.
+
+A demo is not research. The workspace in src/research_integrity/workspace.py is
+for work whose trial count must accumulate; this is a deterministic
+demonstration whose whole value is producing the same numbers every time.
 """
 from __future__ import annotations
 

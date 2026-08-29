@@ -122,12 +122,38 @@ def test_loading_registers_and_versions(store):
     assert store.current_version("sp500") == version
 
 
-def test_a_second_load_is_a_second_version(store):
+def test_new_facts_make_a_new_version(store):
     load(store, "sp500", price_facts(SP500, entity_id="SP500"))
     second = load(store, "sp500", price_facts(
         "observation_date,SP500\n2016-09-06,2186.48\n", entity_id="SP500"))
     assert second == "sp500@v2"
     assert len(store.versions("sp500")) == 2
+
+
+def test_loading_identical_facts_twice_is_idempotent(store):
+    """Harmless while every store lived in a TemporaryDirectory; wrong once one
+    persists.
+
+    A daily run would otherwise accumulate sp500@v1..vN of the same data, and
+    two runs over identical facts would record DIFFERENT dataset versions —
+    making FR-06's "a backtest MUST record the exact version it used" true in
+    letter and misleading in fact.
+    """
+    first = load(store, "sp500", price_facts(SP500, entity_id="SP500"))
+    again = load(store, "sp500", price_facts(SP500, entity_id="SP500"))
+    assert again == first
+    assert len(store.versions("sp500")) == 1
+
+
+def test_idempotence_does_not_swallow_a_restatement(store):
+    """The revision must still land: identical means identical, and a changed
+    value is not."""
+    load(store, "gdp", vintage_facts(GDP_FEB, entity_id="GDPC1",
+                                     vintage_date="2024-02-15"))
+    revised = load(store, "gdp", vintage_facts(GDP_JUN, entity_id="GDPC1",
+                                               vintage_date="2024-06-15"))
+    assert revised == "gdp@v2"
+    assert len(store.restatements("gdp")) >= 1
 
 
 def test_the_series_comes_back_in_order(store):

@@ -195,7 +195,39 @@ def load(store: Any, dataset_id: str, facts: Sequence[dict[str, Any]], *,
             fact["is_restatement"] = bool(
                 previous is not None and previous["value"] != fact["value"])
         marked.append(fact)
+
+    # Idempotent. Appending identical facts again produces a second version with
+    # the same content hash, which was harmless while every store lived in a
+    # TemporaryDirectory and is wrong once one persists: a daily run would
+    # accumulate sp500@v1..vN of the same data, and two runs over identical
+    # facts would record DIFFERENT dataset versions — making FR-06's "record the
+    # exact version it used" true in letter and misleading in fact.
+    existing = _identical_version(store, dataset_id, marked)
+    if existing is not None:
+        return existing
     return store.append_facts(dataset_id, marked, note=note)
+
+
+def _identical_version(store: Any, dataset_id: str,
+                       facts: Sequence[dict[str, Any]]) -> str | None:
+    """The version id already holding exactly these facts, if there is one.
+
+    Uses the store's own content hash rather than a second implementation of it,
+    so the two cannot disagree about what "identical" means.
+    """
+    import hashlib
+    import json
+
+    normalised = [store._normalise(dataset_id, dict(f)) for f in facts]
+    payload = json.dumps(
+        [[r["entity_id"], r["field"], r["value"],
+          str(r["effective_date"]), str(r["knowledge_date"])] for r in normalised],
+        sort_keys=True)
+    digest = hashlib.sha256(payload.encode()).hexdigest()
+    for version in store.versions(dataset_id):
+        if version["content_hash"] == digest:
+            return version["version_id"]
+    return None
 
 
 def fetch_fred(series_id: str, **kwargs) -> str:
