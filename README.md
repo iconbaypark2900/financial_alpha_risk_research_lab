@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-451 tests pass, on every push. Two caveats the row labels are too small to hold:
+453 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 451 passed
+.venv/bin/python -m pytest -q                      # 453 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 451 tests**; the point-in-time store and the engine
+alone and runs **338 of the 453 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -542,8 +542,8 @@ requirements. It has not, and `docs/REQUIREMENTS.md` still says so.
 ## The workspace: a control that accumulates is absent if it is ephemeral
 
 ```bash
-python3 scripts/real_data_pipeline.py                    # persistent workspace
-python3 scripts/real_data_pipeline.py --ephemeral        # the old behaviour
+python3 scripts/real_data_pipeline.py                    # throwaway; touches nothing
+python3 scripts/real_data_pipeline.py --home ~/lab       # persist into a workspace
 ```
 
 FR-08 asks for "a global count of every backtest executed against each dataset,
@@ -620,13 +620,21 @@ not because nothing persists.
 
 ### Which scripts persist, and which must not
 
-| script | workspace | why |
+| script | default | `--home` |
 |---|---|---|
-| `install_workspace.py` | **persistent** | it is the installation |
-| `real_data_pipeline.py` | **persistent** | real searches must accumulate |
-| `believed_strategy.py` | **persistent** | its subject is holdout exhaustion |
-| `null_benchmark_demo.py` | **ephemeral** | output pinned by the README tests |
-| `readme_tables.py` | **ephemeral** | it *generates* the README tables |
+| `install_workspace.py` | **the real workspace** — it *is* the installation, and runs no search | n/a |
+| `real_data_pipeline.py` | throwaway | opts in to persisting |
+| `believed_strategy.py` | throwaway | opts in to persisting |
+| `null_benchmark_demo.py` | throwaway, always — output pinned by the README tests | none |
+| `readme_tables.py` | throwaway, always — it *generates* those tables | none |
+
+**Demonstrations are ephemeral by default and must opt in to touching real
+state.** For a short while they were the other way round, and the consequence
+was concrete: the documented bare invocation of `real_data_pipeline.py` added
+2,691 demo trials to the production count, and `believed_strategy.py` spent one
+of the four looks a family gets before its holdout is exhausted. The seeding
+path had been fixed and the running path left open. A test now asserts the
+fallback is a scratch path rather than the default home, in both scripts.
 
 `believed_strategy.py` was on the wrong side of that line until now. It printed
 *"the registration is spent"* while building its holdout in a temporary

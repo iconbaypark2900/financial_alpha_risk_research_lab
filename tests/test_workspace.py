@@ -190,6 +190,45 @@ def test_the_demo_scripts_stay_ephemeral_on_purpose():
             "asserted by the README tests and would drift")
 
 
+def test_no_demonstration_defaults_to_a_persistent_workspace():
+    """The safe path must be the lazy one.
+
+    For twenty minutes both demo scripts resolved `--home` to None and handed
+    that to `Workspace.open`, which falls back to ~/.financial-alpha-research-lab
+    — so the documented bare invocation added 2,691 demo trials to the
+    production count, and `believed_strategy.py` spent a look at the real
+    holdout. That is precisely the harm install_workspace.py exists to prevent,
+    arriving through a different door: the seeding path was fixed and the
+    running path was left open.
+
+    A demonstration must opt IN to touching real state. This asserts the shape
+    that makes that true — the fallback is a scratch path, never `args.home`
+    alone.
+    """
+    for name in ("real_data_pipeline.py", "believed_strategy.py"):
+        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert "args.home if args.home else" in source, (
+            f"{name} must fall back to a throwaway workspace, not to the "
+            "default home")
+        assert "Workspace.open(args.home)" not in source, (
+            f"{name} passes args.home straight through; when it is None that "
+            "resolves to the production workspace")
+        assert "--ephemeral" not in source, (
+            f"{name} still offers --ephemeral, which implies persistence is "
+            "the default — it must not be")
+
+
+def test_only_the_installer_targets_the_default_home():
+    """install_workspace.py is the one script whose job IS the real workspace,
+    and it runs no search, so it cannot pollute a trial count."""
+    installer = (ROOT / "scripts" / "install_workspace.py").read_text(encoding="utf-8")
+    assert "Workspace.open(args.home)" in installer
+    for forbidden in ("run_search", "search_series", "run_backtest"):
+        assert forbidden not in installer, (
+            f"the installer must not {forbidden}: a fresh workspace's trial "
+            "count should be zero because nothing was searched")
+
+
 def test_the_research_scripts_do_use_the_workspace():
     """The other direction. believed_strategy.py printed "the registration is
     spent" while building its holdout in a TemporaryDirectory, so the next run

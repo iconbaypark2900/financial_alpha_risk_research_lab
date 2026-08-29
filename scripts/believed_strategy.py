@@ -75,11 +75,10 @@ def summarise(returns: np.ndarray) -> dict[str, float]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", default=None,
-                        help="research workspace (default: $RESEARCH_LAB_HOME or "
-                             "~/.financial-alpha-research-lab)")
-    parser.add_argument("--ephemeral", action="store_true",
-                        help="throwaway workspace — resets the holdout, which "
-                             "is the thing this script is about")
+                        help="persist into this research workspace. WITHOUT it "
+                             "the run uses a throwaway workspace: it will not "
+                             "spend a look at a real holdout, which is the "
+                             "scarcest thing this project has")
     args = parser.parse_args(argv)
 
     print(__doc__.strip().splitlines()[0])
@@ -96,12 +95,19 @@ def main(argv: list[str] | None = None) -> int:
         # It built its holdout in a TemporaryDirectory while printing "the
         # registration is spent" — and the next run got a fresh, unspent one.
         # The demonstration of exhaustion was the thing defeating exhaustion.
-        lab = Workspace.open(Path(scratch) / "lab" if args.ephemeral
-                             else args.home)
+        # EPHEMERAL BY DEFAULT, for a sharper reason than the pipeline's: every
+        # run of this script SPENDS A LOOK at the holdout. Defaulting to a real
+        # workspace would mean that anyone running it to see what it does burns
+        # one of the four looks the family gets before the holdout is exhausted
+        # — destroying the scarcest thing here to produce a demonstration.
+        lab = Workspace.open(args.home if args.home else Path(scratch) / "lab")
         print(f"  WORKSPACE  {lab.describe()}")
-        if args.ephemeral:
-            print("             EPHEMERAL — the holdout resets when this exits,")
-            print("             so 'the registration is spent' will not be true")
+        if not args.home:
+            print("             throwaway — pass --home PATH to persist. This "
+                  "run does NOT")
+            print("             spend a look at a real holdout, so "
+                  "'the registration is")
+            print("             spent' below is true only of this workspace.")
         print()
 
         store = lab.store()

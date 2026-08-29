@@ -65,12 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fetch", action="store_true",
                         help="re-download from FRED and ALFRED")
     parser.add_argument("--home", default=None,
-                        help="research workspace (default: $RESEARCH_LAB_HOME or "
-                             "~/.financial-alpha-research-lab). Persists the "
-                             "trial count, the holdout and the run log.")
-    parser.add_argument("--ephemeral", action="store_true",
-                        help="throwaway workspace — the old behaviour, which "
-                             "reset the global trial count on every run")
+                        help="persist into this research workspace. WITHOUT it "
+                             "the run uses a throwaway workspace and touches "
+                             "nothing — a demonstration must not tax the global "
+                             "trial count with searches nobody had an interest in")
     args = parser.parse_args(argv)
 
     print(__doc__.strip().splitlines()[0])
@@ -78,10 +76,21 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory() as scratch:
         tmp = Path(scratch)
-        lab = Workspace.open(tmp / "lab" if args.ephemeral else args.home)
+        # EPHEMERAL BY DEFAULT. This is a demonstration, and it runs a
+        # 2,691-trial sweep. Those are real searches against the dataset, so
+        # FR-08 requires counting them — which means pointing this at a real
+        # workspace by default would tax every genuine result anyone later
+        # produced against sp500 with 2,691 trials nobody had an interest in.
+        # That is exactly what install_workspace.py exists to prevent, and it
+        # arrived here through a different door: the safe path must be the lazy
+        # one. Real research goes through Workspace and Study, not through a
+        # script in scripts/.
+        lab = Workspace.open(args.home if args.home else tmp / "lab")
         print(f"  WORKSPACE  {lab.describe()}")
-        if args.ephemeral:
-            print("             EPHEMERAL — the trial count resets when this exits")
+        if not args.home:
+            print("             throwaway — pass --home PATH to persist. "
+                  "Nothing here")
+            print("             touches a real trial count or holdout.")
         print()
         store = lab.store()
 
@@ -202,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
               "replay is verification, not new research")
         print()
         print(f"  WORKSPACE  {lab.describe()}")
-        if not args.ephemeral:
+        if args.home:
             print("             this count accumulates across runs and "
                   "researchers.")
             print("             Deleting the directory resets it, and the age "

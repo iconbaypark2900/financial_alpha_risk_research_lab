@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **451 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **453 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -100,6 +100,12 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   look to EXHAUSTED. `null_benchmark_demo.py` and `readme_tables.py` stay
   ephemeral deliberately (their output is asserted by the README tests) and a
   test pins that split in both directions.
+- Demo scripts are **ephemeral by default**; `--home` opts in. For a short
+  while they defaulted to the production workspace, so a bare
+  `real_data_pipeline.py` would have added 2,691 demo trials to the global count
+  and `believed_strategy.py` would have spent a look at the real holdout. Two
+  tests now assert the fallback is a scratch path, and that only the installer
+  targets the default home.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on
