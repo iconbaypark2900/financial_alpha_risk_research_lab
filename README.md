@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-463 tests pass, on every push. Two caveats the row labels are too small to hold:
+476 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 463 passed
+.venv/bin/python -m pytest -q                      # 476 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 463 tests**; the point-in-time store and the engine
+alone and runs **338 of the 476 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -539,6 +539,59 @@ reaching for a cross-section still needs vendor data nobody here has. The
 temptation is to treat "we have real data now" as having closed those
 requirements. It has not, and `docs/REQUIREMENTS.md` still says so.
 
+## Survivorship, worked around: SEC EDGAR
+
+Delisted names were the one requirement written off as procurement. They are
+free after all, from a source with a property no price feed has.
+
+**EDGAR carries both dates on every record.** `end` is the period a figure
+describes; `filed` is the day it reached the wire. As-first-reported is a
+property of the data rather than a reconstruction — and a period appearing in
+more than one filing is a restatement with the real revision and the real lag.
+
+### FR-02, on a revision that would change a decile
+
+```
+Apple FY2009 stockholders' equity
+  first reported   27,832,000,000   filed 2009-10-27
+  restated to      31,640,000,000   filed 2010-10-27   (+13.68%)
+```
+
+A book-to-market computed today for early 2010 uses a number nobody had, and is
+out by **13.68%**. The GDP revision demonstrated earlier was 0.028%; this one is
+enough to move a stock between value deciles. `series()` returns the first
+report however often it was later revised.
+
+### FR-03: the dead are retained
+
+```
+AAPL: listed=True   history 2006-09-30..2026-06-27   72 periods
+BBBY: listed=False  history 2009-02-28..2023-02-25   50 periods
+      tickers=[]  exchanges=[]  name "20230930-DK-Butterfly-1, Inc."
+```
+
+EDGAR keeps a company after it stops trading. Bed Bath & Beyond returns its full
+filing history under its post-bankruptcy shell name, with empty tickers and
+exchanges. A universe built from EDGAR **contains the dead**; one built from
+today's index membership does not.
+
+`docs/REQUIREMENTS.md` moves FR-03 from *not implemented* to **partial**, not to
+met, and the gap is specific: EDGAR publishes no delisting **date**, so
+`last_filing` is a proxy — and it carries fundamentals, not prices, so a
+survivorship-free *return* series is still unavailable. **FR-04 has not moved at
+all**; EDGAR publishes no index membership.
+
+### What this found in my own code
+
+`load()` marked a restatement only by comparing against what was already
+**stored**. That catches a revision arriving in a later load — how FRED/ALFRED
+vintages arrive, one CSV each. EDGAR does the opposite: one payload carries
+every vintage of every period, so all of Apple's restatements were inside a
+single batch and **none was marked**. A record nothing flags as a restatement is
+not kept as one, which is precisely what FR-02 asks for. Detection now runs
+within the batch as well as against the store, ordered by filing date, and nine
+restatements appear where zero did.
+
 ## A real cross-section, and what it broke
 
 The factor library, purged/embargoed CV and capacity analysis were all built for
@@ -586,12 +639,13 @@ remove 168, and `assert_no_leakage` passed on all five folds.
 
 ### What it does not close
 
-**FR-03 and FR-04 are exactly as open as before.** An index has its constituent
-changes baked in, no name in it has ever been delisted, and FRED publishes no
-membership history. This is progress against code paths that had never seen more
-than one series, and against nothing else. Delisted-name data is not available
-from any free source, which is why that requirement is procurement rather than
-engineering.
+**An index does not fix survivorship.** Its constituent changes are baked in,
+no name in it has ever been delisted, and FRED publishes no membership history.
+This was progress against code paths that had never seen more than one series,
+and against nothing else.
+
+Delisted-name data turned out to be reachable after all, from a different
+source — see below.
 
 ## The workspace: a control that accumulates is absent if it is ephemeral
 

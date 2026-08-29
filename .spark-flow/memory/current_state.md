@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **463 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **476 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -113,7 +113,15 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   `store.non_positive()` now screens for at load; and 88% ragged dates, handled
   with NaN rather than forward-fill. Cross-sectional momentum scored +0.01361
   against +0.06118 for equal-weighting — five times worse than doing nothing.
-- **FR-03/FR-04 are NOT closed by this.** An index has constituent changes baked
+- **FR-03 moved to PARTIAL via SEC EDGAR** (2026-08-28). EDGAR retains delisted
+  companies (BBBY returns full history, empty tickers, post-bankruptcy name) and
+  carries both `end` and `filed` on every record, so as-first-reported is a
+  property of the source. Demonstrated FR-02 on Apple's real 13.68% FY2009
+  restatement. Still partial: no delisting DATE, and fundamentals not prices.
+  FR-04 has not moved.
+- Found by it: `load` marked restatements only against what was already stored,
+  so EDGAR's single-payload vintages went entirely unmarked (0 -> 9).
+- **FR-03/FR-04 were NOT closed by the index cross-section.** An index has constituent changes baked
   in and no name in it was ever delisted; that data is not free anywhere.
   Recorded explicitly in docs/REQUIREMENTS.md.
 - The Beta gate cannot be run here: the `liaison` CLI is not installed and

@@ -45,6 +45,9 @@ import urllib.request
 from typing import Any, Iterable, Sequence
 
 FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+EDGAR_CONCEPT = ("https://data.sec.gov/api/xbrl/companyconcept/"
+                 "CIK{cik:010d}/us-gaap/{tag}.json")
+EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 ALFRED_CSV = ("https://alfred.stlouisfed.org/graph/alfredgraph.csv"
               "?id={series_id}&vintage_date={vintage_date}")
 
@@ -191,14 +194,29 @@ def load(store: Any, dataset_id: str, facts: Sequence[dict[str, Any]], *,
     # finished. Correct logic, never run at the scale it would actually meet —
     # which is the same way every other defect in this project has arrived.
     known = store.as_reported_index(dataset_id)
+
+    # WITHIN the batch as well as against the store. Comparing only against what
+    # is already stored catches a revision that arrives in a LATER load, which is
+    # how the FRED/ALFRED vintages arrive — one CSV per vintage. EDGAR does the
+    # opposite: a company-concept payload carries every vintage of every period
+    # at once, so all of Apple's restatements are inside a single batch and none
+    # of them was marked. FR-02 wants restatements kept as separate records, and
+    # a record nothing flags as one is not kept as one.
+    #
+    # Sorted by knowledge date first, so "first reported" means first in time
+    # rather than first in whatever order the source happened to emit.
+    ordered = sorted(facts, key=lambda f: (str(f["effective_date"]),
+                                           str(f["knowledge_date"])))
     marked = []
-    for fact in facts:
+    for fact in ordered:
         fact = dict(fact)
+        key = (fact["entity_id"], fact["field"], str(fact["effective_date"]))
         if "is_restatement" not in fact:
-            previous = known.get((fact["entity_id"], fact["field"],
-                                  str(fact["effective_date"])))
+            previous = known.get(key)
             fact["is_restatement"] = bool(
                 previous is not None and previous != fact["value"])
+        if key not in known:
+            known[key] = fact["value"]
         marked.append(fact)
 
     # Idempotent. Appending identical facts again produces a second version with
@@ -242,3 +260,127 @@ def fetch_fred(series_id: str, **kwargs) -> str:
 def fetch_alfred(series_id: str, vintage_date: str, **kwargs) -> str:
     return fetch(ALFRED_CSV.format(series_id=series_id,
                                    vintage_date=vintage_date), **kwargs)
+
+
+# --- SEC EDGAR: the only free source with a real knowledge date and the dead --
+
+def fetch_edgar(url: str, *, contact: str, timeout: float = 60.0) -> str:
+    """GET from SEC EDGAR. `contact` is required and goes in the User-Agent.
+
+    The SEC asks for a contact address in the User-Agent and rate-limits to
+    10 requests a second. Both are conditions of use rather than suggestions,
+    so `contact` has no default: a caller who has not supplied one has not
+    agreed to them.
+    """
+    if not contact or "@" not in contact:
+        raise IngestError(
+            "SEC EDGAR requires a contact email in the User-Agent — it is a "
+            "condition of use, not a formality. Pass contact='you@example.com'.")
+    request = urllib.request.Request(url, headers={
+        "User-Agent": f"financial-alpha-risk-research-lab {contact}",
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        raise IngestError(f"could not fetch {url}: {exc}") from exc
+
+
+def fetch_edgar_concept(cik: int, tag: str, **kwargs) -> str:
+    return fetch_edgar(EDGAR_CONCEPT.format(cik=int(cik), tag=tag), **kwargs)
+
+
+def fetch_edgar_submissions(cik: int, **kwargs) -> str:
+    return fetch_edgar(EDGAR_SUBMISSIONS.format(cik=int(cik)), **kwargs)
+
+
+def concept_facts(payload: str, *, entity_id: str, field: str,
+                  unit: str = "USD",
+                  forms: Sequence[str] = ("10-K", "10-Q")) -> list[dict[str, Any]]:
+    """XBRL company-concept records as facts, as first reported.
+
+    This is the source FR-01 and FR-02 were written for, and the reason it beats
+    every price feed: each record carries BOTH dates.
+
+        end    the period the figure describes  -> effective_date
+        filed  the day the filing was accepted  -> knowledge_date
+
+    A period reported in more than one filing is a restatement, with the real
+    revision and the real lag. Apple's FY2009 stockholders' equity was first
+    reported as 27,832,000,000 on 2009-10-27 and restated to 31,640,000,000 on
+    2010-10-27 — a 13.7% revision. A book-to-market computed today for early
+    2010 uses a number nobody had, and it is not a rounding error.
+
+    Duplicate (end, filed, value) rows are collapsed: EDGAR repeats a figure
+    across the comparative columns of later filings, and each repetition is the
+    same assertion made on the same day, not new information.
+    """
+    import json
+
+    try:
+        data = json.loads(payload)
+    except ValueError as exc:
+        raise IngestError(f"{entity_id}: not valid JSON from EDGAR") from exc
+
+    units = data.get("units", {})
+    if unit not in units:
+        raise IngestError(
+            f"{entity_id}: no {unit} records; available units "
+            f"{sorted(units) or 'none'}")
+
+    seen: set[tuple] = set()
+    facts = []
+    for record in units[unit]:
+        if forms and record.get("form") not in forms:
+            continue
+        end, filed, value = record.get("end"), record.get("filed"), record.get("val")
+        if end is None or filed is None or value is None:
+            continue
+        key = (end, filed, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        facts.append({
+            "entity_id": entity_id, "field": field, "value": float(value),
+            "effective_date": end, "knowledge_date": filed,
+            "source": f"EDGAR/{record.get('form')}/{record.get('accn')}",
+        })
+    if not facts:
+        raise IngestError(f"{entity_id}: no {unit} records in forms {list(forms)}")
+    return facts
+
+
+def listing_status(payload: str) -> dict[str, Any]:
+    """Whether a company still trades, from its EDGAR submissions record.
+
+    FR-03 asks for delisted securities to be retained. EDGAR retains them: a
+    company that has left the exchanges keeps its CIK and its filing history and
+    comes back with EMPTY `tickers` and `exchanges`. Bed Bath & Beyond
+    (CIK 886158) reads that way, renamed to its post-bankruptcy shell.
+
+    This is a signal, not a registry. A company can be absent from `exchanges`
+    for reasons other than delisting, and EDGAR publishes no delisting DATE — so
+    `last_filing` is the best available proxy for when it stopped being a going
+    concern. Said plainly because treating this as an authoritative survivorship
+    record would be exactly the overclaim this project keeps catching.
+    """
+    import json
+
+    try:
+        data = json.loads(payload)
+    except ValueError as exc:
+        raise IngestError("not valid JSON from EDGAR") from exc
+
+    recent = data.get("filings", {}).get("recent", {})
+    dates = recent.get("filingDate", [])
+    return {
+        "cik": data.get("cik"),
+        "name": data.get("name"),
+        "tickers": list(data.get("tickers") or []),
+        "exchanges": list(data.get("exchanges") or []),
+        "still_listed": bool(data.get("tickers") and data.get("exchanges")),
+        "last_filing": max(dates) if dates else None,
+        "sic_description": data.get("sicDescription"),
+    }

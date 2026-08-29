@@ -24,7 +24,7 @@ Status vocabulary, used strictly:
 |---|---|---|---|
 | FR-01 | Data MUST be point-in-time: answer "what was known as of date D" | met | `point_in_time.py` |
 | FR-02 | Fundamentals as-first-reported; restatements as separate versioned records; restated reads blocked or flagged | met | `point_in_time.py`, `factors.py` |
-| FR-03 | Delisted securities retained (survivorship) | **not implemented** | `point_in_time.py` (schema only) |
+| FR-03 | Delisted securities retained (survivorship) | **partial** | `ingest.py` (EDGAR), `point_in_time.py` |
 | FR-04 | Index membership with effective dates | **not implemented** | `point_in_time.py` (schema only) |
 | FR-05 | Corporate actions | **not implemented** | `point_in_time.py` (schema only) |
 | FR-06 | Datasets immutably versioned; backtests record the version used | met | `point_in_time.py`, `run_record.py` |
@@ -35,6 +35,20 @@ them as ordinary facts with effective dates, but nobody has loaded the vendor
 data. Calling the store survivorship-free because it *could* hold delisted names
 would be a claim about data that is not there, so they are marked not
 implemented rather than partial.
+
+**FR-03 moved, via SEC EDGAR.** EDGAR retains a company after it stops trading:
+Bed Bath & Beyond (CIK 886158) still returns its full filing history under the
+name of its post-bankruptcy shell, with empty `tickers` and `exchanges`. So a
+universe assembled from EDGAR contains the dead, which is what the requirement
+asks for, and `listing_status()` reads the signal.
+
+It is **partial**, not met, and the gap is specific: EDGAR publishes no
+delisting DATE, so `last_filing` is a proxy; and it carries FUNDAMENTALS, not
+prices, so a survivorship-free *return* series is still unavailable. Calling
+this met would be the overclaim this project keeps catching.
+
+**FR-04 has not moved at all.** EDGAR publishes no index membership, with or
+without effective dates.
 
 **A cross-section does not close them.** `PointInTimeStore.panel` now reads a
 real multi-asset cross-section, and six FRED index series have been loaded and
@@ -94,6 +108,14 @@ to catch it, because an audit that has never failed is a decoration.
 | FR-24 | Uncommitted code rejected, or recorded as a full diff | met | `run_record.py` |
 | FR-25 | Log queryable by strategy, factor, date range, outcome | met | `run_record.py` |
 
+**FR-02 is demonstrated on a 13.68% restatement.** Apple's FY2009 stockholders'
+equity was first reported as 27,832,000,000 on 2009-10-27 and restated to
+31,640,000,000 a year later. A book-to-market computed today for early 2010 uses
+a number nobody had, and it is out by 13.68% — not a rounding error, and enough
+to move a value factor between deciles. `series()` returns the first report
+however many times it was revised; the revision needs
+`acknowledge_contamination=True`.
+
 **FR-23 is enforced, not asserted.** `replay()` restores the recorded seeds,
 re-executes, and compares a canonical hash against the one stored at the time; a
 test consumes an unrecorded random source and requires the replay to catch it.
@@ -151,10 +173,12 @@ requirement numbers here because nobody has them; see the section above.
 | status | count |
 |---|---:|
 | met | 21 |
-| partial | 1 |
-| not implemented | 3 |
+| partial | 2 |
+| not implemented | 2 |
 
-The three not-implemented requirements (FR-03, FR-04, FR-05) and the partial one
-(FR-19) all block on **data this project does not have** — vendor delisting and
-corporate-action histories, index membership with effective dates, and order-book
-depth. None is blocked on engineering.
+The remaining gaps still block on **data**, not engineering: order-book depth
+(FR-19), a delisting date and survivorship-free PRICES (FR-03), index membership
+with effective dates (FR-04), and corporate actions (FR-05). FR-03 moved from
+not-implemented to partial because SEC EDGAR supplies survivorship-free
+fundamentals with real filing dates — the first of these that turned out to be
+reachable after all.
