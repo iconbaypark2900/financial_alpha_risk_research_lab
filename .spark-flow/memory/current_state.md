@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **495 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **508 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -113,6 +113,14 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   `store.non_positive()` now screens for at load; and 88% ragged dates, handled
   with NaN rather than forward-fill. Cross-sectional momentum scored +0.01361
   against +0.06118 for equal-weighting — five times worse than doing nothing.
+- **A real multi-company universe builds from the mirror** (`universe.py`).
+  Selection is by CIK order and nothing else, because history length, data
+  completeness and balance-sheet size all condition on survival. Measured
+  result on 672 companies: 10.2% restated, rank correlation 0.999687, and the
+  effect depends on granularity — 0.96% of names change DECILE but 7.35% change
+  PERCENTILE. The median revision (1.0%) equals the median gap between adjacent
+  ranks (1.0%), which is exactly why. Look-ahead is severe in a time-series
+  claim, worth ~7% of names on a fine sort, and nearly nothing on a coarse one.
 - **The EDGAR bulk archive is mirrored** at
   `~/.financial-alpha-research-lab/mirrors/companyfacts.zip` — 1,407,496,523
   bytes, 20,281 companies, sha256 314ebb31...  Reads are offline; the digest is

@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-495 tests pass, on every push. Two caveats the row labels are too small to hold:
+508 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 495 passed
+.venv/bin/python -m pytest -q                      # 508 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 495 tests**; the point-in-time store and the engine
+alone and runs **338 of the 508 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -548,6 +548,61 @@ free after all, from a source with a property no price feed has.
 describes; `filed` is the day it reached the wire. As-first-reported is a
 property of the data rather than a reconstruction — and a period appearing in
 more than one filing is a restatement with the real revision and the real lag.
+
+### A real universe, and a result that went the other way
+
+```python
+from src.research_integrity.universe import build, rank_churn
+
+report = build(mirror, store, "edgar-universe", limit=600)
+report.as_dict()["skip_rate"]     # what was left out, and why
+```
+
+**Selection is where survivorship gets in.** The obvious ways to pick companies
+from 20,281 candidates — longest filing history, most complete data, largest
+balance sheet — all condition on survival. A company that went bankrupt in 2015
+scores badly on every one of them *because it died*. So `build` selects by **CIK
+order and nothing else**: CIK is assigned at registration and has no
+relationship to outcome. Companies with no usable data are skipped *after*
+selection and counted, so the skip rate is visible rather than silently shaping
+the set.
+
+Then the question this was all for — how much does a cross-sectional ranking
+move if you use figures nobody had?
+
+```
+672 companies, 38,286 facts, 16% of candidates skipped
+as of 2015-01-01:  10.2% restated,  rank correlation 0.999687
+
+  deciles      (10 buckets)    6 of 626 moved    0.96%
+  percentiles (100 buckets)   46 of 626 moved    7.35%
+```
+
+**It depends entirely on how finely you rank, and the reason is measurable:**
+
+```
+median revision                       1.0%
+median gap between adjacent ranks     1.0%
+equity range           3,392 .. 232,685,000,000
+```
+
+A revision overtakes your neighbour when it is the same size as the gap to your
+neighbour. Those are both 1.0% here, so at **percentile** granularity a typical
+revision is exactly big enough to matter — 7.35% of names move. At **decile**
+granularity the next boundary is ten percentiles away, so almost nothing crosses
+it.
+
+That is a more useful answer than the one expected, and it disciplines an
+intuition this repository was in danger of overselling. Apple's revision was
+13.68% and 38.3% of filers revise something — both large — but *"use
+as-reported data"* is not one rule with one magnitude. It is close to mandatory
+for a level or a growth rate, it is worth about 7% of names on a percentile
+sort, and it is nearly irrelevant on a decile sort of a variable spanning eight
+orders of magnitude. A ratio factor sits somewhere else again, because its
+denominator moves too.
+
+Caveats: 672 companies in CIK order, book equity only, one revision vintage. A
+measurement, not a law.
 
 ### The bulk mirror: data as a versioned artefact
 
