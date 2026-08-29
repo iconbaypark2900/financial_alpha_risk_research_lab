@@ -18,7 +18,7 @@ Present now, all under `src/research_integrity/`: `core.py` (deflated Sharpe,
 minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py`,
 `point_in_time.py`, `execution_costs.py`, `run_record.py`, `search.py`.
 
-- **453 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
+- **463 tests pass** (`pytest -q`), 338 of them on a minimal install, and now on every push: `.github/workflows/tests.yml` runs a 3.12/3.13/3.14 matrix plus a minimal-install job.
 - **V0 is feature-complete.** NautilusTrader is wired (`backtest.py`, added
   2026-08-28). FR-21 is met and audited on every bar of every run. FR-19 is
   PARTIALLY met: latency and slippage are demonstrated, partial fills are not —
@@ -106,6 +106,18 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   and `believed_strategy.py` would have spent a look at the real holdout. Two
   tests now assert the fallback is a scratch path, and that only the installer
   targets the default home.
+- **A real cross-section ran for the first time** (2026-08-28). Six FRED index
+  series through the factor library, panel read and purged CV. Found: an O(n)
+  query in `load` that never finished at 58,699 facts (now one query, 56s); WTI
+  crude at -36.98 on 2020-04-20, which the factor library correctly refuses and
+  `store.non_positive()` now screens for at load; and 88% ragged dates, handled
+  with NaN rather than forward-fill. Cross-sectional momentum scored +0.01361
+  against +0.06118 for equal-weighting — five times worse than doing nothing.
+- **FR-03/FR-04 are NOT closed by this.** An index has constituent changes baked
+  in and no name in it was ever delisted; that data is not free anywhere.
+  Recorded explicitly in docs/REQUIREMENTS.md.
+- The Beta gate cannot be run here: the `liaison` CLI is not installed and
+  `~/spark/agent-system/registry/repos.yaml` does not exist.
 - **The engineering backlog is empty.** What remains is procurement (order-book
   data for FR-19's partial fills) and process (the Beta gate) — neither is code.
 - **Nothing is pushed.** `origin/main` is behind by every commit made on

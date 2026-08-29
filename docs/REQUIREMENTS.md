@@ -36,6 +36,15 @@ data. Calling the store survivorship-free because it *could* hold delisted names
 would be a claim about data that is not there, so they are marked not
 implemented rather than partial.
 
+**A cross-section does not close them.** `PointInTimeStore.panel` now reads a
+real multi-asset cross-section, and six FRED index series have been loaded and
+ranked. That is a genuine cross-section and it is **not** a universe: an index
+has its constituent changes baked in, no name in it has ever been delisted, and
+FRED publishes no membership history. FR-03 and FR-04 are exactly as open as
+they were before the panel existed. The temptation is to read "we have a
+cross-section now" as progress against them; it is progress against the *code
+paths*, which had never seen more than one series, and against nothing else.
+
 ## §5.2 Research integrity (FR-08 – FR-16)
 
 | FR | Requirement | Status | Where |

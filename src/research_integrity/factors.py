@@ -100,8 +100,18 @@ def _as_prices(prices: Sequence[float]) -> np.ndarray:
         raise FactorError("prices contains non-finite values; a NaN price "
                           "propagates into every window that touches it")
     if np.any(arr <= 0):
-        raise FactorError("prices must be positive — a ratio against a "
-                          "non-positive price is not a return")
+        first = int(np.argmax(arr <= 0))
+        raise FactorError(
+            f"prices must be positive — a ratio against a non-positive price is "
+            f"not a return (index {first} is {arr[first]}).\n"
+            "\n"
+            "THIS IS NOT ALWAYS BAD DATA. WTI crude settled at -36.98 on "
+            "2020-04-20, and FRED's DCOILWTICO carries it. A simple return "
+            "through zero is undefined, so refusing is the correct arithmetic "
+            "and not a limitation that can be argued away — but it does mean "
+            "this library cannot price futures, spreads or any instrument whose "
+            "level may cross zero. Log returns cannot rescue it either. Such an "
+            "asset needs a different return definition, not a coerced price.")
     return arr
 
 

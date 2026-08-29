@@ -371,6 +371,114 @@ class PointInTimeStore:
             values.append(float(value))
         return dates, values
 
+    def panel(self, dataset_id: str, entities: Sequence[str], field: str, *,
+              start: str | date | None = None, end: str | date | None = None,
+              knowledge_date: str | date | None = None,
+              complete_cases: bool = False
+              ) -> tuple[list[str], list[str], "np.ndarray"]:
+        """A cross-section: (dates, entities, values) with NaN where absent.
+
+        Returns as-first-reported values, like `series`, for every entity on a
+        common date axis. Missing observations are **NaN and are not filled**.
+
+        THERE IS NO FORWARD-FILL, AND THAT IS THE POINT
+
+        Real series are ragged. Across six FRED indices, 88% of the union of
+        dates is missing for at least one of them, and even inside their common
+        window 252 of 2,599 dates have a hole — 156 of those from Japanese
+        holidays alone. Forward-filling closes the hole by inventing a price
+        that was never quoted, which is the same objection `ingest.price_facts`
+        already makes about a single series, and it is worse in a cross-section:
+        a stale price ranks against live ones, so a holiday reads as a day the
+        asset did not move while everything else did.
+
+        `complete_cases=True` restricts to dates where every entity traded,
+        which is honest and throws data away. The default keeps every date and
+        makes the absence visible as NaN, so a caller must decide rather than
+        inherit a decision. Neither option invents a number.
+        """
+        import numpy as np
+
+        self.require_point_in_time(dataset_id)
+        if not entities:
+            raise PointInTimeError("no entities requested")
+
+        columns = {}
+        for entity in entities:
+            dates, values = self.series(dataset_id, entity, field, start=start,
+                                        end=end, knowledge_date=knowledge_date)
+            columns[entity] = dict(zip(dates, values))
+
+        axis = sorted(set().union(*(set(c) for c in columns.values())))
+        if not axis:
+            raise PointInTimeError(
+                f"no observations for {list(entities)} in {dataset_id}")
+
+        matrix = np.full((len(axis), len(entities)), np.nan)
+        for j, entity in enumerate(entities):
+            column = columns[entity]
+            for i, day in enumerate(axis):
+                if day in column:
+                    matrix[i, j] = column[day]
+
+        if complete_cases:
+            keep = ~np.isnan(matrix).any(axis=1)
+            axis = [d for d, k in zip(axis, keep) if k]
+            matrix = matrix[keep]
+            if not axis:
+                raise PointInTimeError(
+                    "no date has an observation for every entity; the universe "
+                    "never traded together")
+        return axis, list(entities), matrix
+
+    def as_reported_index(self, dataset_id: str) -> dict[tuple, float]:
+        """Every first-reported value in the dataset, keyed by (entity, field, date).
+
+        One query for the whole dataset. `ingest.load` previously called
+        `as_reported` once per incoming fact to decide whether it was a
+        restatement — 58,699 separate round trips for a six-series cross
+        section, each re-running require_point_in_time internally. Invisible on
+        a five-row fixture, invisible on one 2,513-row series, and it simply
+        never finished on the first real cross-section.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT entity_id, field, effective_date, value, knowledge_date "
+                "FROM facts WHERE dataset_id = ? "
+                "ORDER BY entity_id, field, effective_date, knowledge_date ASC",
+                [dataset_id]).fetchall()
+
+        index: dict[tuple, float] = {}
+        for entity_id, field, effective_date, value, _ in rows:
+            key = (entity_id, field, str(effective_date))
+            if key not in index:            # ordered ascending, so first wins
+                index[key] = float(value)
+        return index
+
+    def non_positive(self, dataset_id: str, field: str = "close"
+                     ) -> dict[str, list[tuple[str, float]]]:
+        """Entities holding a value at or below zero, per entity.
+
+        Worth asking BEFORE building a panel. The factor library refuses a
+        non-positive price, correctly — a simple return through zero is
+        undefined — and finding that out from a FactorError two hundred lines
+        into a strategy is a worse way to learn that WTI crude settled at -36.98
+        on 2020-04-20 and that FRED's DCOILWTICO carries it.
+
+        An empty result means every entity can form returns. A non-empty one
+        means the universe contains an instrument this library cannot price, and
+        that is a fact about the universe rather than about the data being bad.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT entity_id, effective_date, value FROM facts "
+                "WHERE dataset_id = ? AND field = ? AND value <= 0 "
+                "ORDER BY entity_id, effective_date", [dataset_id, field]).fetchall()
+        out: dict[str, list[tuple[str, float]]] = {}
+        for entity_id, effective_date, value in rows:
+            out.setdefault(entity_id, []).append((str(effective_date), float(value)))
+        return out
+
     def restatements(self, dataset_id: str) -> list[dict[str, Any]]:
         """Every fact that revised an earlier one. Auditable by construction."""
         with self._connect() as conn:

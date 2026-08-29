@@ -186,14 +186,19 @@ def load(store: Any, dataset_id: str, facts: Sequence[dict[str, Any]], *,
     # time and cannot know a period has been reported before. Detected by
     # comparing against the value already on record, which is exactly the
     # question `as_reported` answers.
+    # ONE query, not one per fact. This called as_reported() per incoming fact,
+    # which is 58,699 round trips for a six-series cross section and never
+    # finished. Correct logic, never run at the scale it would actually meet —
+    # which is the same way every other defect in this project has arrived.
+    known = store.as_reported_index(dataset_id)
     marked = []
     for fact in facts:
         fact = dict(fact)
         if "is_restatement" not in fact:
-            previous = store.as_reported(dataset_id, fact["entity_id"],
-                                         fact["field"], fact["effective_date"])
+            previous = known.get((fact["entity_id"], fact["field"],
+                                  str(fact["effective_date"])))
             fact["is_restatement"] = bool(
-                previous is not None and previous["value"] != fact["value"])
+                previous is not None and previous != fact["value"])
         marked.append(fact)
 
     # Idempotent. Appending identical facts again produces a second version with

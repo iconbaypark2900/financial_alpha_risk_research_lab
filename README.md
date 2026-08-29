@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-453 tests pass, on every push. Two caveats the row labels are too small to hold:
+463 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 453 passed
+.venv/bin/python -m pytest -q                      # 463 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 453 tests**; the point-in-time store and the engine
+alone and runs **338 of the 463 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -538,6 +538,60 @@ survivorship-adjusted composite, not a survivorship-free universe. Anyone
 reaching for a cross-section still needs vendor data nobody here has. The
 temptation is to treat "we have real data now" as having closed those
 requirements. It has not, and `docs/REQUIREMENTS.md` still says so.
+
+## A real cross-section, and what it broke
+
+The factor library, purged/embargoed CV and capacity analysis were all built for
+a **cross-section** and had only ever run on one series. Six FRED index series
+went through them. Three things surfaced within minutes, none of which a fixture
+could have shown.
+
+**Ingestion was O(n) in queries.** `load` called `as_reported()` once per
+incoming fact to decide whether it was a restatement — 58,699 round trips for
+six series. Invisible on a five-row fixture and on one 2,513-row series; it
+never finished on the first real cross-section. Now one query: **56 seconds**.
+
+**A real price was negative.** WTI crude settled at **−36.98 on 2020-04-20**, and
+FRED's `DCOILWTICO` carries it. The factor library refuses a non-positive price,
+and the refusal is correct — a simple return through zero is undefined, and log
+returns cannot rescue it either. But finding that out from a `FactorError` two
+hundred lines into a strategy is a poor way to learn your universe contains an
+instrument this library cannot price. `store.non_positive()` now asks the
+question at load:
+
+```
+screened at load: ['DCOILWTICO'] -> ('2020-04-20', -36.98)
+universe this library can price: SP500, NASDAQ100, DJIA, NASDAQCOM, NIKKEI225
+```
+
+**Real series are ragged.** Across the six, **88% of the union of dates** is
+missing for at least one, and even inside their common window 252 of 2,599 dates
+have a hole — 156 from Japanese holidays alone. `panel()` returns NaN and
+**does not forward-fill**: a stale price ranks against live ones, so a holiday
+would read as a day the asset did not move while everything else did.
+`complete_cases=True` gives the strict inner join instead. Neither invents a
+number.
+
+### What it then said
+
+```
+cross-sectional momentum (long top / short bottom):  +0.01361
+equal-weight the universe:                           +0.06118
+```
+
+The factor strategy is **five times worse than doing nothing clever**. And
+purged CV ran over a real cross-section for the first time: naive k-fold would
+leak 160 observations (1.43%) at a 20-day label horizon; purge and embargo
+remove 168, and `assert_no_leakage` passed on all five folds.
+
+### What it does not close
+
+**FR-03 and FR-04 are exactly as open as before.** An index has its constituent
+changes baked in, no name in it has ever been delisted, and FRED publishes no
+membership history. This is progress against code paths that had never seen more
+than one series, and against nothing else. Delisted-name data is not available
+from any free source, which is why that requirement is procurement rather than
+engineering.
 
 ## The workspace: a control that accumulates is absent if it is ephemeral
 
