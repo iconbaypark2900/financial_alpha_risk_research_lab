@@ -38,14 +38,19 @@ whether it succeeded or raised.
     6.        run
     7. FR-25  record the outcome, including failure
 
-WHAT THIS DOES NOT DO
+FOUR ENTRY POINTS, AND ONLY TWO OF THEM CLOSE THE DATE HOLE
 
-The date range is DECLARED by the caller, not derived from the data it hands
-over. A caller that reads holdout dates and declares a different range defeats
-the FR-10 check. Closing that needs the study to load prices from the store
-itself, which needs a price-shaped read the fact table does not yet offer. Said
-here rather than left for someone to discover: this makes the honest path easy
-and the dishonest path deliberate, which is weaker than impossible.
+`search` and `backtest` take the range as an ARGUMENT, so the FR-10 check is
+made against two strings the caller chose rather than against the data it hands
+over. `search_series` and `backtest_series` read through the store and DERIVE
+the range from what came back, so the holdout check and the data are the same
+fact.
+
+This header used to state the weaker guarantee unconditionally, which stopped
+being true the moment the first `_series` method existed — and a limitation
+recorded only in a module header is one a caller reaching for a method never
+meets. It is stated in `search` and `backtest` instead, where it applies and
+where it is read.
 """
 from __future__ import annotations
 
@@ -90,9 +95,12 @@ class Study:
 
         study = Study(dataset_id="sp500", store=store, counter=counter,
                       holdout=holdout, log=log)
-        study.backtest(prices, start="2015-01-01", end="2019-12-31",
-                       strategy="momentum", params={"lookback": 60},
-                       seeds={"deterministic": 0})
+        study.backtest_series("SP500", params={"lookback": 60},
+                              seeds={"deterministic": 0})
+
+    The example reads through the store on purpose. `backtest` takes the same
+    run and lets the caller declare the date range instead, which is the weaker
+    of the two and says so in its own docstring.
     """
     dataset_id: str
     store: Any
@@ -131,7 +139,20 @@ class Study:
                allow_uncommitted: bool = False,
                replay_params: dict[str, Any] | None = None,
                **kwargs) -> dict[str, Any]:
-        """Run a parameter sweep with every control attached."""
+        """Run a parameter sweep with every control attached.
+
+        THE RANGE IS DECLARED HERE, NOT DERIVED
+
+        `start` and `end` are what the caller SAYS it read, and the FR-10 check
+        is made against those two strings. A caller that reads holdout dates and
+        declares a range outside them defeats it. That makes the honest path easy
+        and the dishonest path deliberate, which is weaker than impossible, and
+        it is the reason `search_series` exists: it reads through the store and
+        derives the range from the data returned, so the two cannot disagree.
+
+        This method is kept for a caller holding an array and no store. If you
+        have the store, use the other one.
+        """
         from .search import run_search
 
         version = self._admit(start, end)
@@ -158,18 +179,42 @@ class Study:
                  params: dict[str, Any] | None = None,
                  seeds: dict[str, int] | None = None,
                  factors: Sequence[str] | None = None,
-                 allow_uncommitted: bool = False, **kwargs) -> dict[str, Any]:
-        """Run one event-driven backtest with every control attached."""
-        from .backtest import run_backtest
+                 allow_uncommitted: bool = False,
+                 replay_params: dict[str, Any] | None = None,
+                 **kwargs) -> dict[str, Any]:
+        """Run one event-driven backtest with every control attached.
 
+        THE RANGE IS DECLARED HERE, NOT DERIVED
+
+        As in `search`, and with the same consequence: the FR-10 check sees the
+        `start` and `end` the caller passed, not the dates the `prices` actually
+        cover, so handing over holdout prices under a declared range outside the
+        holdout is not refused. `backtest_series` is the version without that
+        hole — it reads the prices through the store and derives the range from
+        them. tests/test_study.py pins this weakness as a limitation rather than
+        leaving it to be discovered.
+
+        This method is kept for a caller holding an array and no store.
+        """
         version = self._admit(start, end)
         params = dict(params or {})
         run_id = self.log.start(
-            strategy, params={**params, "start": start, "end": end},
+            strategy,
+            params=replay_params or {**params, "start": start, "end": end},
             seeds=seeds or {"deterministic": 0},
             dataset_versions=[version], factors=factors,
             allow_uncommitted=allow_uncommitted)
         try:
+            # Imported here, at step 6, rather than at the top of the method.
+            # Every refusal above this line — FR-07, FR-10, FR-06, FR-24 — is
+            # one this study owes a caller whether or not the OPTIONAL engine is
+            # installed. Importing first replaced all four with an ImportError
+            # about a missing dependency and made them untestable in an install
+            # that has the store and not the engine, which is a configuration
+            # this project supports. Inside the try, an absent engine is
+            # recorded as a failed run (FR-25) instead of vanishing.
+            from .backtest import run_backtest
+
             result = run_backtest(prices, counter=self.counter,
                                   dataset_id=self.dataset_id, **{**params, **kwargs})
         except Exception as exc:
@@ -230,6 +275,60 @@ class Study:
                 "start": start, "end": end, "knowledge_date": knowledge_date,
                 "param_sets": [dict(p) for p in param_sets],
                 "search_id": kwargs.get("search_id"),
+            },
+            **kwargs)
+
+    def backtest_series(self, entity_id: str, *,
+                        field: str = "close",
+                        knowledge_date: str | None = None,
+                        start: str | None = None, end: str | None = None,
+                        strategy: str = "momentum",
+                        params: dict[str, Any] | None = None,
+                        seeds: dict[str, int] | None = None,
+                        factors: Sequence[str] | None = None,
+                        allow_uncommitted: bool = False,
+                        **kwargs) -> dict[str, Any]:
+        """Backtest a series READ FROM THE STORE, not one handed in.
+
+        `search_series` closed the declared-range hole for search and left
+        `backtest` — the FR-19/FR-21 half of the seam — without a twin, so the
+        hole stayed open on exactly the path the package is named for. This is
+        that twin. The range is DERIVED from the prices actually returned, so
+        the holdout check and the data are the same fact.
+
+        The refusal lands after the read and before anything is counted:
+        `series` only reads, and `backtest` runs `_admit` before it opens a run
+        record or starts a trial. Reading is not backtesting, and refusing at
+        the point of use is what keeps the counter honest (FR-08).
+
+        WHAT GOES INTO THE RECORD
+
+        FR-22 asks for the FULL parameter set. `backtest` merges `params` with
+        any surplus keyword arguments and hands the merge to the engine, so the
+        merge is what determines the answer and the merge is what gets written
+        down — recording `params` alone would document a run that cannot be
+        repeated from its record. `strategy`, `seeds`, `factors` and
+        `allow_uncommitted` are named explicitly rather than swept into
+        `**kwargs` so that what remains is unambiguously the engine's, and the
+        recorded parameter set is the call signature rather than a guess at it.
+        """
+        dates, prices = self.series(entity_id, field,
+                                    knowledge_date=knowledge_date,
+                                    start=start, end=end)
+        if len(dates) < 2:
+            raise StudyError(
+                f"{entity_id}/{field} returned {len(dates)} observations for "
+                f"{self.dataset_id} — nothing to backtest over")
+
+        params = dict(params or {})
+        return self.backtest(
+            prices, start=dates[0], end=dates[-1],
+            strategy=strategy, params=params, seeds=seeds, factors=factors,
+            allow_uncommitted=allow_uncommitted,
+            replay_params={
+                "entity_id": entity_id, "field": field,
+                "start": start, "end": end, "knowledge_date": knowledge_date,
+                "strategy": strategy, "params": {**params, **kwargs},
             },
             **kwargs)
 

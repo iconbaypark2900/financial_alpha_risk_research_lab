@@ -2,7 +2,7 @@
 # by code in this repository, or is the engine the PRD names. Nothing else
 # belongs in this file.
 #
-# For a minimal install, `pip install -e .` gives numpy alone and runs 401 of the 566 tests; the store and engine slices skip. `pip install -e '.[all]'`
+# For a minimal install, `pip install -e .` gives numpy alone and runs 421 of the 601 tests; the store and engine slices skip. `pip install -e '.[all]'`
 # matches this file. pyproject.toml is the machine-readable form of it, and
 # tests/test_packaging.py fails when the two disagree.
 #
@@ -47,5 +47,5 @@ pytest>=7.0.0
 #              flagged in the README and is owed a decision, so pinning the
 #              library it replaced would misrepresent which one is in use.
 #
-# migration_inbox/finGuard carries its own requirements.txt and is V1 input,
+# docs/superseded/finGuard carries its own requirements.txt and was V1 input,
 # not a dependency of anything in src/.

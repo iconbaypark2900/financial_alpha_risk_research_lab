@@ -11,6 +11,7 @@ believing "this is noise", the procedure has to be shown capable of saying
 "this is signal" when there is one. That is the same discriminating check that
 caught a deflated-Sharpe implementation returning a constant.
 """
+import math
 import re
 import sys
 from pathlib import Path
@@ -557,3 +558,78 @@ def test_no_positive_sharpe_comparison_got_easier_to_win():
     assert out["indistinguishable_from_noise"] is True, out["verdict"]
     assert out["indistinguishable_margin"] == pytest.approx(0.10)
     assert "20% of the real search's own Sharpe" in out["verdict"]
+
+
+# --- the null has to have swept the same space, not just the same sample ----
+
+def test_a_null_run_over_a_different_number_of_trials_is_refused():
+    """The twin of `test_a_null_run_over_a_different_sample_is_refused`.
+
+    The best of N trials grows with N whether or not anything is there, so a
+    ten-trial null against a 7,866-trial search scores lower for its size
+    alone. `compare_to_null` read `real["trials_run"]` and never looked at the
+    null's, so it charged the whole of that difference to the shuffle and
+    reported the sweep-size gap as an edge over noise.
+    """
+    with pytest.raises(ValueError, match="same parameter grid"):
+        compare_to_null(
+            {"best_raw_sharpe": 0.20, "trials_run": 7866, "n_observations": 3770},
+            {"best_raw_sharpe": 0.02, "trials_run": 10, "n_observations": 3770})
+
+
+def test_a_matched_null_still_reports_the_count_both_searches_ran():
+    """The other direction, and what stops the refusal being answered with
+    "refuse more": two halves of one benchmark agree to the trial, and the
+    `trials` key still has to come back."""
+    out = compare_to_null(
+        {"best_raw_sharpe": 0.20, "trials_run": 7866, "n_observations": 3770},
+        {"best_raw_sharpe": 0.02, "trials_run": 7866, "n_observations": 3770})
+    assert out["trials"] == 7866
+    assert out["indistinguishable_from_noise"] is False
+
+
+def test_a_null_that_recorded_no_trial_count_is_compared_unverified():
+    """The named gap, pinned so it is a decision rather than an oversight.
+
+    A bare dict records nothing to check, and refusing it would break every
+    caller comparing hand-built summaries — the same fallback `n_observations`
+    already has. Every `null_benchmark` result carries `trials_run`, so the
+    unchecked case is exactly the one that did not come from a search.
+
+    (This one passes against the unfixed code too. It is here so the fallback
+    cannot be tightened into a refusal without someone deciding to.)
+    """
+    out = compare_to_null({"best_raw_sharpe": 0.020, "trials_run": 500},
+                          {"best_raw_sharpe": 0.019})
+    assert out["trials"] == 500
+
+
+def test_the_best_of_n_grows_with_n_which_is_what_the_check_protects():
+    """The number `_shared_trial_count` justifies itself with, computed.
+
+    E[max of N iid N(0,1)] by quadrature on 1 - F(x)^N, so the docstring's
+    1.5387 at N = 10 and 3.7921 at N = 7,866 are derived here rather than
+    asserted there. The ratio is what a mismatched null costs: sweep 786 times
+    less of the space and score 2.46x lower for that reason alone, which
+    `compare_to_null` would otherwise read as the real search beating noise.
+    """
+    x = np.linspace(-12.0, 14.0, 400_001)
+    cdf = 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
+    upper, lower = x >= 0, x < 0
+
+    def trapezoid(y: np.ndarray, at: np.ndarray) -> float:
+        # Spelled out rather than np.trapezoid, which is numpy 2 only, and
+        # np.trapz, which numpy 2 deprecates. This package declares numpy>=1.21
+        # and the minimal install is a supported configuration.
+        return float(np.sum(0.5 * (y[1:] + y[:-1]) * np.diff(at)))
+
+    def expected_max(n_trials: int) -> float:
+        # E[max] = int_0^inf (1 - F^N) dx - int_-inf^0 F^N dx.
+        best_below = cdf ** n_trials
+        return (trapezoid(1.0 - best_below[upper], x[upper])
+                - trapezoid(best_below[lower], x[lower]))
+
+    small, large = expected_max(10), expected_max(7866)
+    assert small == pytest.approx(1.5387, abs=5e-4)
+    assert large == pytest.approx(3.7921, abs=5e-4)
+    assert large / small == pytest.approx(2.46, abs=0.01)

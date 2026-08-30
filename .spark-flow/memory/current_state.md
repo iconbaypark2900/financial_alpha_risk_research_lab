@@ -130,7 +130,8 @@ minimum backtest length), `trial_counter.py`, `holdout.py`, `cross_validation.py
   companies (BBBY returns full history, empty tickers, post-bankruptcy name) and
   carries both `end` and `filed` on every record, so as-first-reported is a
   property of the source. Demonstrated FR-02 on Apple's real 13.68% FY2009
-  restatement. Still partial: no delisting DATE, and fundamentals not prices.
+  restatement. Still partial: `last_filing` is a proxy (Form 25/25-NSE carry a
+  real delisting date but nothing reads them yet), and fundamentals not prices.
   FR-04 has not moved.
 - Found by it: `load` marked restatements only against what was already stored,
   so EDGAR's single-payload vintages went entirely unmarked (0 -> 9).

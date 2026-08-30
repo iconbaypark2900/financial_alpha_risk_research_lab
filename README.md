@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-566 tests pass, on every push. Two caveats the row labels are too small to hold:
+601 tests pass, on every push. Three caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -58,13 +58,24 @@ capability: the controls must exist before the thing they constrain.
   audited, but *partial fills* need order-book depth this project does not have.
   Latency and slippage are demonstrated; partial fills are not. See the engine
   section below — the limitation is pinned by a test, not left to be found.
+- **The four data-blocked requirements are decided, not pending — ratified
+  2026-08-30.** FR-03, FR-04, FR-05 and FR-19 are open on *data*. Licensing CRSP,
+  Compustat, WRDS or LSEG is rejected: CRSP and Compustat leave FR-19 untouched,
+  and both licences whose terms were read in full oblige destruction of the data
+  on cancellation, so FR-23 would hold only while the invoice is paid. Rescoping
+  FR-04 and FR-05 out of scope is refused — a split is indistinguishable from a
+  restatement without FR-05, and FR-02 is met and running. What was adopted is
+  free: EDGAR's Form 25 and 25-NSE carry a filed, dated delisting notice, so the
+  delisting date FR-03 lacks is reachable the same way its fundamentals were.
+  Costs, licence clauses and the measurements behind each claim are in
+  [`docs/DATA_DECISION.md`](docs/DATA_DECISION.md).
 
 ## Running it
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 566 passed
+.venv/bin/python -m pytest -q                      # 601 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +84,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **401 of the 566 tests**; the point-in-time store and the engine
+alone and runs **421 of the 601 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -210,7 +221,7 @@ covariance, so rebalancing quietly degraded to equal-weight without saying so.
 `visualizer.py` and `app.py` are **not being migrated at all** — a 426-line
 Plotly/Streamlit UI is not portfolio construction, and this README already
 declines UI work for an internal tool. With the simulator rewritten,
-`migration_inbox/finGuard/` has nothing left that this project wants.
+`docs/superseded/finGuard/` has nothing left that this project wants.
 
 ## History
 
@@ -686,10 +697,19 @@ exchanges. A universe built from EDGAR **contains the dead**; one built from
 today's index membership does not.
 
 `docs/REQUIREMENTS.md` moves FR-03 from *not implemented* to **partial**, not to
-met, and the gap is specific: EDGAR publishes no delisting **date**, so
-`last_filing` is a proxy — and it carries fundamentals, not prices, so a
-survivorship-free *return* series is still unavailable. **FR-04 has not moved at
-all**; EDGAR publishes no index membership.
+met, and the gap is specific: the bulk company-facts archive carries no
+delisting **date**, so `last_filing` is a proxy — and it carries fundamentals,
+not prices, so a survivorship-free *return* series is still unavailable.
+**FR-04 has not moved at all**; EDGAR publishes no index membership.
+
+The delisting-date half of that gap turns out to be reachable from a different
+corner of the same source. Form 25 and Form 25-NSE are dated removal-from-listing
+notices — 618 of them in 2023 Q1 alone, the 25-NSE half structured XML — and
+removal is effective ten days after filing under 17 CFR 240.12d2-2(d)(1).
+Measured against BBBY, whose Form 25-NSE was filed 2023-07-10, the `last_filing`
+proxy returns 2023-12-04: **137 days late**. Mirroring them is the adopted
+recommendation in [`docs/DATA_DECISION.md`](docs/DATA_DECISION.md); nothing reads
+them yet, so FR-03 stays partial.
 
 ### What this found in my own code
 
@@ -929,14 +949,20 @@ exists, its own tests pass, and it constrains nothing.
 
 That is its output when the wiring is removed, which is how it was verified.
 
-### What it does not do
+### What the raw entry points do not do
 
-The date range is **declared by the caller**, not derived from the data handed
-over. A caller who reads holdout dates and declares a different range defeats the
-FR-10 check. Closing that needs the study to load prices from the store itself,
-which needs a price-shaped read the fact table does not yet offer. This makes the
-honest path easy and the dishonest path deliberate, which is weaker than
-impossible — and is stated here rather than left to be discovered.
+`search` and `backtest` take the date range as an **argument**, so the FR-10
+check is made against two strings the caller chose rather than against the data
+handed over. A caller who reads holdout dates and declares a different range
+defeats it. That limitation now lives in those two methods' docstrings, where a
+caller meets it, rather than only here.
+
+`search_series` and `backtest_series` read the prices through the store and
+**derive** the range from what came back, so the holdout check and the data are
+the same fact. They are the supported entry points; the raw two are kept for a
+caller holding an array and no store, and
+`tests/test_study.py::test_the_raw_backtest_checks_the_declared_range_not_the_prices`
+pins the weakness so it stays named.
 
 ## Point-in-time data store (FR-01, FR-02, FR-06, FR-07)
 

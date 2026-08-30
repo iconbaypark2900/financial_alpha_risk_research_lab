@@ -387,10 +387,15 @@ def listing_status(payload: str) -> dict[str, Any]:
     (CIK 886158) reads that way, renamed to its post-bankruptcy shell.
 
     This is a signal, not a registry. A company can be absent from `exchanges`
-    for reasons other than delisting, and EDGAR publishes no delisting DATE — so
-    `last_filing` is the best available proxy for when it stopped being a going
-    concern. Said plainly because treating this as an authoritative survivorship
-    record would be exactly the overclaim this project keeps catching.
+    for reasons other than delisting, so `last_filing` is a proxy for when it
+    stopped being a going concern rather than a date it was removed.
+
+    That proxy is not the only thing available, and this docstring used to say
+    it was. EDGAR DOES publish a delisting date: Form 25 and Form 25-NSE are
+    filed to remove a class from an exchange, and the 25-NSE half is structured
+    XML carrying the issuer CIK and the class. Nothing here reads them yet — so
+    the limitation is that this FUNCTION uses a proxy, not that the data does
+    not exist. See docs/DATA_DECISION.md.
     """
     import json
 

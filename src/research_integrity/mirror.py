@@ -105,6 +105,12 @@ class Mirror:
                     handle.write(block)
                     digest.update(block)
                     written += len(block)
+        # Broad because it cleans up and re-raises rather than continuing: no
+        # partial file may outlive a failed download, whatever killed it. It
+        # cannot be narrowed to OSError either — `http.client.IncompleteRead`,
+        # the truncated stream this cleanup exists for, is an HTTPException —
+        # and a narrower clause would let a Mirror method raise something the
+        # caller was never told to catch. `from exc` keeps the cause.
         except Exception as exc:
             temporary.unlink(missing_ok=True)
             raise MirrorError(f"could not fetch {url}: {exc}") from exc

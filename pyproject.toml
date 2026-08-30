@@ -32,7 +32,7 @@ readme = "README.md"
 # range rather than leaving it asserted in a metadata file.
 requires-python = ">=3.12"
 
-# Core is numpy alone, and that is not a simplification: the suite runs 401 of 566 tests with nothing else installed. duckdb and nautilus_trader are
+# Core is numpy alone, and that is not a simplification: the suite runs 421 of 601 tests with nothing else installed. duckdb and nautilus_trader are
 # import-guarded, their slices skip when absent, and modelling them as required
 # would misdescribe a configuration this project actually supports and tests.
 dependencies = [
@@ -59,3 +59,31 @@ testpaths = ["tests"]
 # "No module named 'src'". A test suite that works under one invocation is a
 # test suite most CI configurations will not run.
 pythonpath = ["."]
+
+# ONE UPSTREAM DEPRECATION, NAMED — NOT A BLANKET `ignore`
+#
+# The suite emitted 50 `Pandas4Warning: Timestamp.utcnow is deprecated`, every
+# one of them reported against `engine.run()` in this project's own files. The
+# attribution is wrong and it is what makes a blanket `ignore` tempting. The
+# deprecated call is `pd.Timestamp.utcnow()` inside nautilus_trader's compiled
+# `backtest/engine.pyx` (lines 1418 and 1601 in 1.231.0); this project never
+# imports pandas, and its own `_utcnow()` helpers use `datetime.now(timezone
+# .utc)`. Cython frames are invisible to `sys._getframe`, so the warnings
+# machinery walks past engine.pyx and blames the nearest Python frame.
+#
+# So the filter matches the MESSAGE, and deliberately not the module: the only
+# module names that would work are `src.research_integrity.backtest` and
+# `tests.test_backtest` — ours — and scoping by them would hide every future
+# deprecation this project's backtest code raises about itself. The message is
+# matched by prefix (`re.match`), stopping before "Use Timestamp.now('UTC')"
+# because pytest treats the field as a regex and those parentheses are a group.
+# The category is DeprecationWarning, which Pandas4Warning subclasses, rather
+# than `pandas.errors.Pandas4Warning`: naming it would make the minimal install
+# — numpy alone, no pandas — fail at startup with UsageError under the
+# pytest>=7.0.0 this project declares.
+#
+# tests/test_warning_filters.py executes this entry both ways: the upstream
+# warning must be silenced, and a warning from this project's own code must not.
+filterwarnings = [
+    "ignore:Timestamp\\.utcnow is deprecated:DeprecationWarning",
+]

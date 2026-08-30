@@ -520,3 +520,39 @@ def test_an_ordinary_diff_is_stored_as_readable_text(log, clean_repo):
 def test_encode_diff_round_trips_arbitrary_bytes():
     raw = b"diff --git a/x b/x\n+# \xe9\xff\xfe not utf-8\n"
     assert decode_diff(encode_diff(raw.decode("utf-8", "surrogateescape"))) == raw
+
+
+# ---- a working tree git cannot report is not a clean one --------------------
+
+def _corrupt_the_index(repo: Path) -> None:
+    """`git status` then exits 128 while `git rev-parse HEAD` still succeeds, so
+    the tree looks readable to the SHA probe and is not to the dirtiness one.
+    No mocking: this is a state a real repository reaches."""
+    (repo / ".git" / "index").write_bytes(b"\x00\x01\x02")
+
+
+def test_a_tree_git_cannot_report_is_not_recorded_as_clean(log, clean_repo):
+    """The strongest claim this module makes is code_dirty=0 beside a real SHA:
+    this is exactly the committed code. It must never be made on no evidence."""
+    (clean_repo / "strategy.py").write_text("VALUE = 999\n")
+    _corrupt_the_index(clean_repo)
+
+    assert git_state(clean_repo)["state_unknown"] is True
+    with pytest.raises(UncommittedCode, match="unknown"):
+        log.start("momentum", **BASE)
+
+
+def test_an_unreportable_tree_is_refused_even_with_allow_uncommitted(log, clean_repo):
+    """allow_uncommitted trades a refusal for a recorded diff. Here there is no
+    diff to record, so there is nothing to trade and the override must not apply."""
+    (clean_repo / "strategy.py").write_text("VALUE = 999\n")
+    _corrupt_the_index(clean_repo)
+
+    with pytest.raises(UncommittedCode):
+        log.start("momentum", allow_uncommitted=True, **BASE)
+
+
+def test_a_healthy_clean_tree_is_still_reported_as_known(log, clean_repo):
+    """The refusal must not fire on the ordinary case it sits next to."""
+    assert git_state(clean_repo)["state_unknown"] is False
+    assert log.get(log.start("momentum", **BASE))["code_dirty"] == 0

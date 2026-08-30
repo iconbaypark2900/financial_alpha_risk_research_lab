@@ -16,6 +16,7 @@ import pytest
 
 from src.portfolio.kelly import (
     HALF_KELLY,
+    MAX_CONDITION_NUMBER,
     KellyError,
     fractional,
     growth_rate,
@@ -310,12 +311,16 @@ def test_a_sound_covariance_is_accepted_at_every_scale(scale):
 def test_an_ill_conditioned_but_estimable_covariance_is_still_accepted():
     """The conditioning threshold has to separate two regimes, not clear one case.
 
-    A sample covariance of N assets over T days is full rank while N < T and
-    reaches a condition number of only ~3.6e5 at N/T = 0.996, or ~2e6 with
-    one-factor correlation structure at N/T = 0.95. At N >= T it is exactly
-    rank-deficient and the condition number jumps past 1e17. This matrix sits in
-    the first regime at 1e6 and must be answered however unattractive the answer
-    is — a control that fires on ordinary estimated data is not a control.
+    A covariance at 1e6 must be answered however unattractive the answer is: a
+    control that fires on ordinary estimated data is not a control. 1e6 is
+    nearly two orders below the limit and above anything an N/T <= 0.95
+    estimate reaches, so it is accepted by both of the arguments the limit is
+    made of — see `test_the_conditioning_limit_is_a_convention_in_a_wide_band`.
+
+    This docstring used to place the choice by claiming an estimated covariance
+    "reaches a condition number of only ~3.6e5 at N/T = 0.996". That is
+    measurably false; the same test measures it. Deleted rather than softened,
+    and the assertion below is unchanged.
     """
     angle = 0.7
     rotation = np.array([[math.cos(angle), -math.sin(angle)],
@@ -342,3 +347,141 @@ def test_an_all_zero_covariance_is_refused_for_the_right_reason():
 
 MU_OK = np.array([0.0004, 0.0003])
 COV_OK = np.array([[0.0001, 0.00002], [0.00002, 0.00009]])
+
+
+# --- the prose has to be as checkable as the formulas -----------------------
+
+def test_the_portfolio_modules_cite_paths_that_exist():
+    """A source citation nobody executes is a claim, and claims here rot.
+
+    Both modules said they were migrated from `migration_inbox/finGuard/`.
+    That directory was retired to `docs/superseded/finGuard/` on 2026-08-28
+    and `tests/test_requirements_map.py::test_the_migration_inbox_is_gone`
+    asserts it must never come back — so the two statements in the tree
+    disagreed, and the one a reader of `src/portfolio/` meets first was the
+    wrong one.
+
+    Resolved against the filesystem rather than matched against the old
+    string, so this catches the NEXT path that moves as well as the one that
+    already did.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    dangling = []
+    for name in ("src/portfolio/__init__.py", "src/portfolio/kelly.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        for span in re.findall(r"`([^`\n]+)`", source):
+            if "/" in span and re.fullmatch(r"[\w.\-/]+", span):
+                if not (root / span).exists():
+                    dangling.append(f"{name} cites `{span}`")
+
+    assert not dangling, (
+        f"{dangling} — the cited path is not in the tree. finGuard now lives "
+        "at docs/superseded/finGuard/.")
+
+
+# --- MAX_CONDITION_NUMBER's justification, run rather than quoted -----------
+#
+# The comment above the constant used to end "ten orders of magnitude separate
+# ordinary estimation from rank deficiency, and 6.7e7 sits in the empty middle
+# of them". Written down as an assertion, that claim fails: four of forty
+# full-rank draws land above the limit. These two tests produce every figure
+# the replacement comment states, so the next reader can check it in a second
+# rather than take it.
+
+def test_the_conditioning_limit_is_a_convention_in_a_wide_band():
+    """The empirical half: where estimated covariances actually sit.
+
+    `np.cov` removes a degree of freedom, so N = T - 1 is the LAST full-rank
+    case — at T = 250 that is N/T = 0.996, the exact configuration the old
+    comment quoted 3.6e5 for. The smallest eigenvalue there is heavy-tailed,
+    so the condition number is not a ceiling but a distribution, and this limit
+    cuts through the middle of it. That is not a flaw in the limit; it is the
+    reason the limit cannot be presented as a measured boundary.
+
+    The half that does survive is the lower bound, and it is the one that
+    matters for not firing on real data: at N/T = 0.95 nothing comes within
+    four orders of magnitude.
+    """
+    T = 250
+
+    def sample_cov(n_assets: int, seed: int) -> np.ndarray:
+        return np.cov(np.random.default_rng(seed).standard_normal((n_assets, T)))
+
+    edge = np.array([np.linalg.cond(sample_cov(T - 1, s)) for s in range(40)])
+    over = int((edge > MAX_CONDITION_NUMBER).sum())
+    assert np.median(edge) < MAX_CONDITION_NUMBER < edge.max(), (
+        f"the limit must lie INSIDE this distribution for the point to hold: "
+        f"median {np.median(edge):.3e}, max {edge.max():.3e}")
+    assert over >= 2, f"only {over} of 40 draws exceed the limit"
+
+    # And the draws above it are full rank, which is what makes the middle
+    # occupied rather than merely noisy: this is not a rank-deficient matrix
+    # being caught, it is an estimate the researcher was entitled to form.
+    worst = sample_cov(T - 1, int(np.argmax(edge)))
+    assert np.linalg.matrix_rank(worst) == T - 1
+    assert np.linalg.cond(worst) > MAX_CONDITION_NUMBER
+
+    ordinary = np.array([np.linalg.cond(sample_cov(int(0.95 * T), s))
+                         for s in range(40)])
+    assert ordinary.max() < 1e4 < MAX_CONDITION_NUMBER, (
+        f"the limit fires on ordinary estimation: {ordinary.max():.3e}")
+
+
+def test_precision_is_not_what_sets_the_conditioning_limit():
+    """The derivable half, and the reason it does not pick 6.7e7 on its own.
+
+    A solve loses about log10(cond) of a float64's ~15.7 significant digits.
+    Measured against an EXACT rational solve of the same system — not against
+    another float64 answer, which would measure agreement rather than accuracy
+    — the weights still carry about eight digits at the limit and four at 1e13.
+    A weight quoted to the basis point needs four, so precision alone licenses
+    a limit five orders of magnitude looser than this one.
+
+    What actually goes wrong first is measured alongside: gross leverage grows
+    in exact proportion to the condition number, so at the limit the answer is
+    eight good digits of a position nobody can hold. The refusal is economic.
+    """
+    from fractions import Fraction
+
+    angle = 0.7
+    rotation = np.array([[math.cos(angle), -math.sin(angle)],
+                         [math.sin(angle), math.cos(angle)]])
+    mu = np.array([0.0005, 0.0004])
+
+    def probe(target_condition: float) -> tuple[float, float, float]:
+        sigma = rotation @ np.diag([1e-4, 1e-4 / target_condition]) @ rotation.T
+        sigma = 0.5 * (sigma + sigma.T)
+        weights = np.linalg.solve(sigma, mu)
+        s = [[Fraction(sigma[i][j]) for j in range(2)] for i in range(2)]
+        b = [Fraction(mu[0]), Fraction(mu[1])]
+        det = s[0][0] * s[1][1] - s[0][1] * s[1][0]
+        exact = np.array([float((b[0] * s[1][1] - s[0][1] * b[1]) / det),
+                          float((s[0][0] * b[1] - b[0] * s[1][0]) / det)])
+        error = float(np.linalg.norm(weights - exact) / np.linalg.norm(exact))
+        return np.linalg.cond(sigma), error, float(np.abs(weights).sum())
+
+    cond_mid, err_mid, lev_mid = probe(1e6)
+    cond_lim, err_lim, lev_lim = probe(MAX_CONDITION_NUMBER)
+    _, err_1e13, _ = probe(1e13)
+    _, err_none, lev_none = probe(1.0 / np.finfo(float).eps)
+
+    # Digits are genuinely being lost on the way up — without this the two
+    # bounds below could both hold on a solve that was simply exact.
+    assert err_mid < err_lim < err_1e13 < err_none
+
+    # Eight digits at the limit: enough that precision is not the binding
+    # constraint, and not so many that nothing is being lost.
+    assert 1e-12 < err_lim < 1e-7, err_lim
+    # Four still survive at 1e13, which is what a weight is quoted to.
+    assert 1e-7 < err_1e13 < 1e-3, err_1e13
+    # And essentially none at 1/eps, which is why 1/eps cannot be the line.
+    assert err_none > 1e-3, err_none
+
+    # Leverage tracks the condition number one for one. This is the quantity
+    # that makes the answer unusable while the arithmetic is still fine.
+    assert lev_lim > 1e6
+    assert lev_lim / lev_mid == pytest.approx(cond_lim / cond_mid, rel=1e-3)
+    assert lev_none > 1e14

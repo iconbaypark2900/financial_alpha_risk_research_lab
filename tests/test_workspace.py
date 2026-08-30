@@ -112,8 +112,32 @@ def test_holdout_exhaustion_survives_a_new_workspace_object(lab):
 
 
 def test_run_records_accumulate(lab, tmp_path):
+    """The count must RISE with the runs written through the log, and be the
+    file's property rather than this object's.
+
+    This test used to open a log, write nothing through it, and assert the count
+    was zero — 0 == 0, under a name promising the opposite. Nothing in the suite
+    ever observed a workspace run count above zero, so replacing
+    `len(self.log().query())` in `provenance` with the literal 0 left all 566
+    tests green.
+    """
     log = lab.log(repo=tmp_path)         # a non-repo, so FR-24 is not the subject
     assert lab.provenance()["runs_recorded"] == 0
+
+    for i in range(3):
+        # allow_uncommitted, because tmp_path is not a git checkout at all and
+        # FR-24's refusal is the subject of tests/test_run_record.py, not this
+        # one. What is being tested here is that the count moves.
+        run_id = log.start("momentum", params={"i": i},
+                           seeds={"deterministic": 0},
+                           dataset_versions=["v1"], allow_uncommitted=True)
+        log.finish(run_id, result={"sharpe": 0.01 * i})
+
+    assert lab.provenance()["runs_recorded"] == 3
+    assert "3 run(s) recorded" in lab.describe()
+    # A different Workspace object over the same directory: the count belongs to
+    # the file, which is the whole claim this module makes.
+    assert Workspace.open(lab.home).provenance()["runs_recorded"] == 3
 
 
 # --- making a reset conspicuous --------------------------------------------

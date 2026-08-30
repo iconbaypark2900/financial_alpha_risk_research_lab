@@ -229,20 +229,43 @@ def canonical_hash(obj: Any) -> str:
 
 def _git(repo: str | Path, *args: str,
          env: dict[str, str] | None = None) -> str | None:
-    """Run a git command, returning its stdout, or None if git failed.
+    """Run a git command, returning its stdout, or None if git could not run.
 
     The output is NOT stripped. A diff without its final newline is a patch
     `git apply` rejects as corrupt, which made the stored diff unusable for the
     reconstruction it exists for. `surrogateescape` keeps a path that is not
     valid UTF-8 round-trippable back into a git argument, so such a file is
     still detected instead of taking the whole listing down with it.
+
+    NONE MEANS "GIT DID NOT ANSWER" (2026-08-30)
+
+    None is returned for a nonzero exit as well as for the two exceptions
+    caught below, so it means only that this command produced no trustworthy
+    answer — never that the answer was "nothing".
+
+    Narrowing the except clause was half the fix and on its own would have been
+    a decoration. The danger was never where the None came from but what the
+    caller did with it: `git_state` used to read a None from `status` or
+    `ls-files` as "nothing is modified" and record `code_dirty=0` beside a real
+    commit SHA. A corrupt `.git/index` is enough to produce it — `status` exits
+    128 while `rev-parse HEAD` still succeeds — so no exception was needed and
+    narrowing this clause would not have touched the likelier route. That is
+    the unknown code FR-24 exists to refuse, arriving through the control meant
+    to catch it, and it is closed in `git_state` (`state_unknown`) rather than
+    here.
     """
     try:
         out = subprocess.run(["git", "-C", str(repo), *args], env=env,
                              capture_output=True, text=True, timeout=30,
                              errors="surrogateescape")
         return out.stdout if out.returncode == 0 else None
-    except Exception:
+    # Swallowed deliberately, and only these: OSError is git absent from the
+    # box or unrunnable, SubprocessError is the 30s timeout. Those are facts
+    # about the environment and degrading to None is the right answer. A
+    # MemoryError buffering `diff --binary` on a large tree, or a TypeError
+    # from a mis-built argument list, is not — it must reach the caller rather
+    # than be written down as cleanliness.
+    except (OSError, subprocess.SubprocessError):
         return None
 
 
@@ -352,20 +375,43 @@ def git_state(repo: str | Path = ".") -> dict[str, Any]:
     # So: modifications to tracked files always count, and untracked files count
     # only when they are source. An untracked .py can be imported and is
     # genuinely unknown code; an untracked .db is an artifact.
-    tracked = _git(top, "status", "--porcelain", "--untracked-files=no") or ""
+    tracked = _git(top, "status", "--porcelain", "--untracked-files=no")
     # -z, because git's default output QUOTES a path outside ASCII
     # ("caf\303\251.py"). That form ends in a quote rather than .py, so such a
     # file was neither counted as source nor passed back to git intelligibly.
-    untracked = (_git(top, "ls-files", "--others", "--exclude-standard", "-z")
-                 or "").split("\0")
+    untracked_raw = _git(top, "ls-files", "--others", "--exclude-standard", "-z")
+
+    # NEITHER PROBE MAY DEGRADE TO "CLEAN".
+    #
+    # `_git` returns None when git could not answer — a nonzero exit, a timeout,
+    # a box where it will not run. A corrupt .git/index is enough: `status`
+    # exits 128 while `rev-parse HEAD` still succeeds, so the old
+    # `_git(...) or ""` recorded a genuinely modified tree as code_dirty=0
+    # beside a real commit SHA, and accepted the run with the default
+    # allow_uncommitted=False. The control reported the strongest thing it can
+    # say about a tree — this is exactly the committed code — on no evidence.
+    #
+    # Unknown is not clean. FR-24: "A result from unknown code is not a result."
+    #
+    # Scoped to a tree that IS a repository: no repo at all makes every probe
+    # fail, and that case is already refused one level up by code_sha ==
+    # "UNKNOWN". Conflating the two would refuse the supported "no repo, pass
+    # allow_uncommitted" path — the control firing on a case it was not built
+    # for, which is how a control gets switched off.
+    unknown = bool(sha) and (tracked is None or untracked_raw is None)
+
+    untracked = (untracked_raw or "").split("\0")
     SOURCE_SUFFIXES = (".py", ".pyx", ".sql", ".toml", ".cfg", ".yaml", ".yml")
     untracked_source = [f for f in untracked if f.endswith(SOURCE_SUFFIXES)]
-    dirty = bool(tracked.strip()) or bool(untracked_source)
+    dirty = bool((tracked or "").strip()) or bool(untracked_source)
 
     diff, unrecorded = _full_diff(top, untracked_source) if dirty else (None, [])
     return {
         "code_sha": sha or "UNKNOWN",
         "dirty": dirty,
+        # True when git could not report the working tree at all. Distinct from
+        # `dirty`, which is a claim; this is the absence of one.
+        "state_unknown": unknown,
         "diff": diff,
         "untracked_source": untracked_source,
         # Which untracked source the diff actually holds, and which it does not.
@@ -383,7 +429,14 @@ def environment() -> dict[str, Any]:
         packages = sorted(f"{d.metadata['Name']}=={d.version}"
                           for d in distributions()
                           if d.metadata.get("Name"))
-    except Exception:  # pragma: no cover
+    # Swallowed deliberately, and this one stays broad: enumerating
+    # site-packages reads metadata this project did not write, and one
+    # distribution with an unreadable METADATA raises anything from KeyError to
+    # UnicodeDecodeError. The package list is context for explaining a
+    # difference between two runs; the reproducibility contract is the SHA, the
+    # diff, the seeds and the dataset versions. Losing the context must not
+    # cost the record.
+    except Exception:
         packages = []
     return {
         "python": sys.version.split()[0],
@@ -488,6 +541,18 @@ class ExperimentLog:
             raise UncommittedCode(
                 "no git commit could be determined for this working tree, so "
                 "the code that produced the result cannot be identified.")
+        # An unreadable working tree is refused even with allow_uncommitted,
+        # because that flag trades a refusal for a RECORDED DIFF, and there is
+        # no diff to record: git could not say what changed. Accepting here
+        # would write code_dirty=0 beside a real SHA — the strongest claim this
+        # module makes, on no evidence.
+        if git.get("state_unknown"):
+            raise UncommittedCode(
+                "git could not report the state of this working tree, so "
+                "whether the code is committed is unknown. FR-24: a result "
+                "from unknown code is not a result. This is not the same as a "
+                "clean tree and is not overridable by allow_uncommitted — fix "
+                "the repository (a corrupt .git/index will do it) and re-run.")
 
         run_id = str(uuid.uuid4())
         with self._connect() as conn:
@@ -532,6 +597,13 @@ class ExperimentLog:
         handle = _RunHandle(self, run_id)
         try:
             yield handle
+        # Broad because the outcome is being RECORDED, not diagnosed: FR-25
+        # asks the log to be queryable by outcome, and a failure the log never
+        # saw is a run it still has as running. Nothing is hidden — the record
+        # is a side effect and the exception is re-raised unchanged. Note the
+        # boundary is Exception, not BaseException: a Ctrl-C is an interrupted
+        # run rather than a failed one, and it leaves `outcome` NULL instead of
+        # answering an FR-25 query with the wrong word.
         except Exception as exc:
             self.finish(run_id, result={"error": f"{type(exc).__name__}: {exc}"},
                         outcome="failed")

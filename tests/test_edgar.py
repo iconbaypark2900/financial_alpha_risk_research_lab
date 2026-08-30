@@ -177,9 +177,11 @@ def test_a_live_company_reads_as_listed():
 
 
 def test_listing_status_is_a_signal_not_a_registry():
-    """EDGAR publishes no delisting DATE, so `last_filing` is a proxy. Treating
-    it as authoritative would be the overclaim this project keeps catching, and
-    the docstring says so — this pins that it keeps saying so."""
+    """`last_filing` is a proxy: absence from `exchanges` has causes other than
+    delisting. Treating it as authoritative would be the overclaim this project
+    keeps catching, and the docstring says so — this pins that it keeps saying
+    so. (It does NOT say EDGAR has no delisting date; Form 25/25-NSE carry one.
+    Nothing here reads them yet.)"""
     from src.research_integrity import ingest
 
     assert "signal, not a registry" in ingest.listing_status.__doc__

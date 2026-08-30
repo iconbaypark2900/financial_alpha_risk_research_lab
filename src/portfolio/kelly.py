@@ -1,4 +1,4 @@
-"""Kelly sizing — PRD 04 §5.5 (V1), migrated from `migration_inbox/finGuard/`.
+"""Kelly sizing — PRD 04 §5.5 (V1), migrated from `docs/superseded/finGuard/`.
 
 WHAT WAS WRONG WITH THE SOURCE, AND WHY IT MATTERS THAT IT PASSED ITS TESTS
 
@@ -63,22 +63,77 @@ class KellyError(ValueError):
 # Thorp's standing recommendation, and the reason `fractional` exists at all.
 HALF_KELLY = 0.5
 
-# The condition number above which inv(S) is not a portfolio. The solve loses
-# about log10(cond(S)) of the sixteen significant decimal digits a float64
-# carries, so at 1/sqrt(eps) = 6.7e7 half of them are gone — but the reason to
-# draw the line THERE is where the two regimes actually sit, not that half is a
-# natural amount to lose. A sample covariance of N assets over T days is full
-# rank while N < T and reaches a condition number of only about 3.6e5 at
-# N/T = 0.996, or 2e6 with one-factor correlation structure at N/T = 0.95. At
-# N >= T it is exactly rank-deficient and the condition number jumps past 1e17.
-# Ten orders of magnitude separate ordinary estimation from rank deficiency, and
-# 6.7e7 sits in the empty middle of them.
+# The condition number above which inv(S) is not a portfolio. 1/sqrt(eps) is a
+# CONVENTION — the point at which half of a float64's ~15.7 significant decimal
+# digits are gone — and this comment says so rather than claiming that a
+# measurement picked it. The comment that stood here did claim that, and the
+# claim does not survive being run; what it said and what the measurement says
+# is at the bottom.
 #
-# The looser 1/eps = 4.5e15 — the point at which the solve has NO correct digits
-# left — is demonstrably too weak to be the line: two assets differing by 1e-9
-# give a condition number of 4.4e14 and 2.1e14 gross leverage, and 1/eps accepts
-# them. Refusing only what floating point cannot represent is not the same as
-# refusing what cannot be answered.
+# THE BAND THE LIMIT HAS TO LIE IN, WHICH IS DERIVABLE. Two bounds, opposite
+# directions.
+#
+# From above, precision. A solve loses about log10(cond(S)) digits, so the limit
+# has to leave enough of them for a weight to mean anything. Measured against an
+# EXACT rational solve of the same 2x2 system: relative error 1.4e-9 at 6.7e7,
+# 7.1e-5 at 1e13, 4.1e-2 at 1/eps = 4.5e15. A weight quoted to the basis point
+# needs four significant digits, so precision on its own permits a limit
+# anywhere up to about 1e13.
+#
+# From below, estimation. The limit must not fire on a covariance a researcher
+# would legitimately hand it. Forty iid sample covariances at N/T = 0.95 measure
+# 2.1e3 to 8.6e3, so anything from about 1e4 upwards is clear of ordinary
+# estimation.
+#
+# Any threshold in that band decides the two ENDS identically: a well-estimated
+# covariance is accepted, and two assets differing by 1e-9 — condition number
+# 4.4e14, gross leverage 2.1e14 — is refused. It does not follow that the choice
+# inside the band is free, and the measurement at the bottom of this comment
+# says it is not: at N/T = 0.996 a full-rank estimate runs 8.3e4 to 8.8e10, so
+# this limit sits INSIDE that distribution and refuses roughly four such
+# estimates in forty. A limit at 1e13 would accept all of them; one at 1e4 would
+# refuse nearly all.
+#
+# So the honest statement is narrower than "no measurement fixes the number".
+# The bounds fix a band; within it the number trades false refusals of a
+# marginal estimate against accepting a portfolio nobody can hold, and nothing
+# measured here settles that trade. 1/sqrt(eps) is a named convention lying
+# inside the band rather than a figure chosen to suit a fixture, which is the
+# one virtue available and is not the same as being correct. A caller who works
+# at N/T near 1 should expect refusals and shrink the covariance first.
+#
+# PRECISION SOUNDS LIKE THE REASON AND IS NOT
+#
+# The answer stops being usable long before the arithmetic stops being right.
+# w = inv(S) @ (mu - r) puts (mu - r) . v_min / lambda_min along the smallest
+# eigenvector, so gross leverage grows in PROPORTION to the condition number for
+# any mu not orthogonal to that direction — measured on a two-asset rotation,
+# 2.3e5x capital at 1e6, 1.5e7x at 6.7e7, 8.2e14x at 1/eps. At this limit the
+# portfolio is eight correct digits of a position nobody can hold. The refusal
+# is an economic one wearing a numerical threshold, and calling it numerical is
+# what made the previous comment reach for an empirical claim it did not have.
+#
+# WHAT THE PREVIOUS COMMENT CLAIMED, AND WHY IT IS GONE
+#
+# That an estimated covariance "reaches a condition number of only about 3.6e5
+# at N/T = 0.996", that rank deficiency starts past 1e17, and that "6.7e7 sits
+# in the empty middle of them". The middle is not empty. `np.cov` removes a
+# degree of freedom, so N = T - 1 is the last FULL-RANK case; at T = 250 that is
+# N/T = 0.996 exactly, and over forty iid draws the condition number runs 8.3e4
+# to 8.8e10 with a median of 1.1e6 and four of the forty above this limit. The
+# line cuts through the distribution of a full-rank estimate rather than through
+# a gap between regimes, and 3.6e5 was an order of magnitude below that
+# distribution's median rather than its ceiling.
+#
+# `tests/test_portfolio_kelly.py` pins the REASONING above, not its arithmetic:
+# that the limit lies in the band, that an ordinary estimate is accepted, that a
+# rank-deficient one is refused, and that leverage — not precision — is what the
+# limit is really buying. The individual figures are measurements taken while
+# writing this, reproducible from the described setup but not re-derived on
+# every run. Stated because the distinction matters here: a number in a comment
+# is exactly the kind of claim this project exists to distrust, and claiming
+# these were all test-produced would have been the same error one paragraph
+# after correcting it.
 MAX_CONDITION_NUMBER = 1.0 / math.sqrt(np.finfo(float).eps)
 
 

@@ -394,10 +394,27 @@ def compare_to_null(real: dict[str, Any], null: dict[str, Any]) -> dict[str, Any
     sample length, so only the relative margin is available and the
     collapse-at-zero weakness returns. That is why `run_search` records
     `n_observations`, and why this is a fallback rather than the design.
+
+    WHAT THE TWO SEARCHES MUST HAVE IN COMMON
+
+    The sample and the sweep, and both are refused rather than reconciled:
+    `_shared_sample_length` on `n_observations`, `_shared_trial_count` on
+    `trials_run`. One reason covers both. This function attributes the entire
+    gap between the two Sharpes to the shuffle, and each of those quantities
+    moves that gap on its own, so a mismatch in either makes the headline
+    sentence false rather than imprecise.
+
+    The trial count was the half left unchecked: it read the real search's
+    `trials_run` for the `trials` it reports and never asked the null's. A
+    ten-trial null against a 7,866-trial search therefore came back "exceeds
+    the null benchmark ... by 0.1800", above every margin, on a difference
+    that is mostly one side having looked 786 times harder — and reported
+    `trials: 7866` for a comparison only one of the two ran.
     """
     real_s = real["best_raw_sharpe"]
     null_s = null["best_raw_sharpe"]
     n_obs = _shared_sample_length(real, null)
+    trials = _shared_trial_count(real, null)
 
     excess = real_s - null_s
     margin, scale = _indistinguishable_margin(real_s, n_obs)
@@ -439,7 +456,7 @@ def compare_to_null(real: dict[str, Any], null: dict[str, Any]) -> dict[str, Any
                                      if real_s > 0 and null_s > 0 else None),
         "real_deflated_sharpe": real.get("deflated_sharpe"),
         "null_deflated_sharpe": null.get("deflated_sharpe"),
-        "trials": real["trials_run"],
+        "trials": trials,
         "indistinguishable_from_noise": indistinguishable,
         "verdict": verdict,
     }
@@ -463,6 +480,55 @@ def _shared_sample_length(real: dict[str, Any], null: dict[str, Any]) -> int | N
             "against the same returns.")
     n = a if a is not None else b
     return int(n) if n is not None and int(n) > 1 else None
+
+
+def _shared_trial_count(real: dict[str, Any], null: dict[str, Any]) -> int:
+    """The sweep both searches ran, refused when they disagree.
+
+    The twin of `_shared_sample_length`, and refused for the twin reason: the
+    best of N trials grows with N whether or not there is anything to find. The
+    expected maximum of N iid standard normals is 1.5387 at N = 10 and 3.7921
+    at N = 7,866 — a factor of 2.46 from the size of the sweep alone, before
+    any question of signal, and computed by
+    `test_the_best_of_n_grows_with_n_which_is_what_the_check_protects` rather
+    than quoted here. An undersized null therefore scores low for a reason that
+    is not the shuffle, and this function has no way to separate the two: it
+    charges the whole difference to the shuffle by construction.
+
+    EQUALITY, AND NOT A TOLERANCE BAND
+
+    Both numbers are `len(param_sets)` for a grid committed before either
+    search ran, and `null_benchmark` hands `run_search` the caller's own
+    `param_sets` — so the two halves of a genuine null benchmark agree to the
+    trial. Nothing here is estimated and nothing is floating point, which
+    leaves a tolerance no noise to absorb: any width at all admits only pairs
+    that swept different amounts of the space, which is the thing being
+    refused. Nor could a width be chosen honestly, because the quantity it
+    would be protecting grows like sqrt(2 ln N) — one percentage stands for
+    different amounts of search at 50 trials and at 50,000.
+
+    `trials_evaluated` is deliberately NOT compared. It can differ between two
+    halves of the same benchmark without either being wrong: a trial raises or
+    not depending on the data it was handed, and the shuffled series is
+    different data. `trials_run` is the committed size of the sweep and cannot.
+
+    Checked on the null's side, not required of it — exactly as
+    `n_observations` is. Every `null_benchmark` result carries `trials_run`,
+    because it comes from `run_search`; a caller assembling bare dicts by hand
+    records nothing to compare against and gets the real search's own count
+    back unverified.
+    """
+    a = int(real["trials_run"])
+    b = null.get("trials_run")
+    if b is not None and int(b) != a:
+        raise ValueError(
+            f"the real search ran {a:,} trials and the null {int(b):,}. A null "
+            "benchmark is the same search over the same sample, reshuffled; "
+            "the best of N trials grows with N, so a null that swept less of "
+            "the space scores lower for its size alone and the gap between the "
+            "two Sharpes is not attributable to the shuffle. Re-run the null "
+            "over the same parameter grid.")
+    return a
 
 
 def _indistinguishable_margin(sharpe: float, n_observations: int | None
