@@ -212,8 +212,7 @@ def run_search(returns: Sequence[float], param_sets: Iterable[dict[str, Any]], *
 
     counter.record_outcomes(outcomes, n_observations=int(returns.size))
 
-    inputs = counter.deflation_inputs(dataset_id)
-    result = {
+    return {
         "search_id": search_id,
         "dataset_id": dataset_id,
         "trials_run": len(param_sets),
@@ -221,29 +220,93 @@ def run_search(returns: Sequence[float], param_sets: Iterable[dict[str, Any]], *
         "best_raw_sharpe": best["sharpe"],
         "best_params": best["params"],
         "n_observations": int(returns.size),
-        **inputs,
+        # FR-09: the deflated Sharpe is the headline, not the raw one.
+        **deflation_block(returns, best["sharpe"],
+                          counter.deflation_inputs(dataset_id)),
     }
 
-    # FR-09: the deflated Sharpe is the headline, not the raw one.
+
+# Every key in a search result whose value comes from the global trial ledger
+# rather than from this search's own inputs. `with_recorded_deflation` restores
+# exactly these from a run record; the rest a replay must re-derive.
+COUNTER_DERIVED_KEYS = frozenset({
+    "dataset_id", "n_trials", "var_trials", "trials_with_outcome",
+    "trials_without_outcome", "deflated_sharpe", "deflated_sharpe_unavailable",
+    "min_backtest_length", "sample_too_short",
+})
+
+
+def deflation_block(returns: np.ndarray, best_sharpe: float,
+                    inputs: dict[str, Any]) -> dict[str, Any]:
+    """The half of a search result that the GLOBAL trial ledger determines.
+
+    Split out of `run_search` because it is the only half a replay cannot
+    re-derive. `inputs` is the counter's state across the dataset's entire
+    history — FR-08's "every backtest executed against each dataset, across all
+    researchers and all time" — so it grows with every search anyone runs and
+    is not a function of THIS search's recorded parameters. Everything above it
+    in the result is.
+    """
+    block = dict(inputs)
     if inputs["var_trials"]:
-        result["deflated_sharpe"] = deflated_sharpe_ratio(
-            observed_sharpe=best["sharpe"],
+        block["deflated_sharpe"] = deflated_sharpe_ratio(
+            observed_sharpe=best_sharpe,
             n_trials=inputs["n_trials"],
             sample_length=int(returns.size),
             skewness=float(_skew(returns)),
             kurtosis=float(_kurtosis(returns)),
             var_trials=inputs["var_trials"])
-        result["min_backtest_length"] = minimum_backtest_length(
-            best["sharpe"], inputs["n_trials"]) if best["sharpe"] > 0 else None
-        result["sample_too_short"] = (
-            result["min_backtest_length"] is not None
-            and returns.size < result["min_backtest_length"])
+        block["min_backtest_length"] = minimum_backtest_length(
+            best_sharpe, inputs["n_trials"]) if best_sharpe > 0 else None
+        block["sample_too_short"] = (
+            block["min_backtest_length"] is not None
+            and returns.size < block["min_backtest_length"])
     else:
-        result["deflated_sharpe"] = None
-        result["deflated_sharpe_unavailable"] = (
+        block["deflated_sharpe"] = None
+        block["deflated_sharpe_unavailable"] = (
             "fewer than two trials reported a Sharpe, so the variance across "
             "trials is undefined; deflation is not possible")
-    return result
+    return block
+
+
+def with_recorded_deflation(result: dict[str, Any], returns: Sequence[float], *,
+                            recorded: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild a REPLAYED search's ledger-derived block from the run record.
+
+    For FR-23 replay, and nothing else. `Study.replay_search` explains why the
+    alternative — dropping these keys from the comparison — was rejected.
+
+    The trial count and the Sharpe variance are read from `recorded`; the
+    deflated Sharpe, minimum backtest length and sample-length verdict are
+    RECOMPUTED from them and from the replayed returns. So the derivation is
+    still checked bitwise, against the burden the run actually carried, rather
+    than copied out of the record.
+
+    What this cannot do is verify the recorded ledger state itself — a replay
+    has no way to reconstruct a past global count, which is what makes it
+    global. That number is defended where it is written: the trials table is
+    append-only by trigger. Note that `runs.result_json` is NOT covered by the
+    run record's write-once trigger, which guards `result_hash`; a `result_json`
+    edited after the fact therefore surfaces here as a replay FAILURE, because
+    the block rebuilt from it no longer hashes to the stored digest. That is the
+    behaviour worth having, and it is the concrete reason these keys are
+    restored rather than excluded from the comparison.
+
+    This function writes nothing, so a fabricated `recorded` corrupts one
+    returned dict and no stored count.
+    """
+    missing = sorted(k for k in ("n_trials", "var_trials") if k not in recorded)
+    if missing:
+        raise ValueError(
+            f"the recorded result is missing {', '.join(missing)}, so there is "
+            "no trial-ledger state to replay the deflation against. Only a "
+            "completed search records one.")
+    ledger = {k: recorded[k] for k in
+              ("dataset_id", "n_trials", "var_trials", "trials_with_outcome",
+               "trials_without_outcome") if k in recorded}
+    return {**{k: v for k, v in result.items() if k not in COUNTER_DERIVED_KEYS},
+            **deflation_block(np.asarray(returns, dtype=float),
+                              result["best_raw_sharpe"], ledger)}
 
 
 def null_benchmark(returns: Sequence[float], param_sets: Iterable[dict[str, Any]], *,
@@ -282,36 +345,150 @@ def compare_to_null(real: dict[str, Any], null: dict[str, Any]) -> dict[str, Any
     The verdict is deliberately blunt. A researcher reading two tables of
     numbers will find a reason the real one is different; a sentence saying the
     raw Sharpe is indistinguishable from noise is harder to argue with.
+
+    WHAT REPLACED `null_s >= real_s * 0.8`, AND WHY
+
+    That rule read "the null got within 20% of the real search", and it assumed
+    a positive Sharpe without saying so. This module's default does not produce
+    one: `moving_average_crossover` scores excess over buy-and-hold, and the
+    best of 7,866 SPY variants scores -0.0194 that way. Multiplying a negative
+    number by 0.8 moves it UP, so the threshold sat ABOVE the real Sharpe and
+    the two branches swapped. A real search of -0.0194 against a null of -0.0190
+    — noise strictly winning — was reported as "meaningfully exceeds the null
+    benchmark, 1.0x", and that ratio was two negatives divided, which is
+    positive and means nothing. The README's own headline real-data result,
+    -0.0064, is in the same regime, and every test in this file used a positive
+    Sharpe, so nothing caught it.
+
+    The comparison is now on the DIFFERENCE, `real - null`. That is the quantity
+    the question is actually about, and it does not change meaning when the sign
+    does. A multiplicative threshold cannot survive a sign change; it also
+    collapses at zero, where 0.0002 against 0.0001 is "2x" and is nothing. So
+    the sign was only half of what was wrong with it, and a signed variant of
+    the same multiplication would have left the other half in place.
+
+    WHAT THE DIFFERENCE IS JUDGED AGAINST
+
+    The WIDER of two margins, because "not meaningfully different" has two
+    senses and a result should have to clear both:
+
+      - the sampling variability of a Sharpe estimate over the sample the
+        searches ran on — one standard error, sqrt((1 + SR^2 / 2) / n), Lo
+        (2002), "The Statistics of Sharpe Ratios", eq. (9) for iid returns. A
+        difference smaller than this is one the data cannot resolve, whatever
+        its sign and whatever its size relative to either Sharpe. This is the
+        absolute floor the multiplicative rule never had.
+      - 20% of |real|, which is the old rule's magnitude with the sign removed.
+        Kept because its judgement was sound where it applied: a fifth of the
+        thing you are measuring is not an edge. Taking the wider of the two
+        means no positive-Sharpe comparison becomes easier to win than it was.
+
+    The first is a SCALE, not a test statistic, and no p-value is claimed for
+    it. It is deliberately conservative: each side is the MAXIMUM of many
+    trials, and the spread of a maximum is tighter than that of a single
+    estimate, so a real difference has to clear a wider bar here than a sharper
+    test would set. For a tool that exists to stop people announcing they beat
+    noise, "indistinguishable" is the direction to err in.
+
+    A caller passing bare dicts rather than `run_search` output records no
+    sample length, so only the relative margin is available and the
+    collapse-at-zero weakness returns. That is why `run_search` records
+    `n_observations`, and why this is a fallback rather than the design.
     """
     real_s = real["best_raw_sharpe"]
     null_s = null["best_raw_sharpe"]
-    ratio = real_s / null_s if null_s not in (0, None) else math.inf
-    indistinguishable = null_s >= real_s * 0.8
+    n_obs = _shared_sample_length(real, null)
+
+    excess = real_s - null_s
+    margin, scale = _indistinguishable_margin(real_s, n_obs)
+    indistinguishable = excess <= margin
 
     if indistinguishable:
+        # Which way it fell has to be stated. A near-miss and a loss to noise
+        # read identically once both are called NOISE, and only one of them
+        # means the search was beaten by returns with no sequence in them.
+        detail = (f"The reshuffled series scored HIGHER, by {-excess:.4f}."
+                  if excess < 0 else
+                  f"The real search led by {excess:.4f}, inside the "
+                  f"{margin:.4f} that is {scale}.")
         verdict = (
-            f"NOISE. The same search on reshuffled data reached a raw Sharpe of "
-            f"{null_s:.4f} against {real_s:.4f} on the real data — "
-            f"{null_s / real_s:.0%} of it, from returns with no sequence at all. "
+            f"NOISE. The same search on reshuffled data reached a raw Sharpe "
+            f"of {null_s:.4f} against {real_s:.4f} on the real data. {detail} "
             "The raw figure is measuring how hard you searched, not what you "
             "found.")
     else:
         verdict = (
-            f"The real search ({real_s:.4f}) meaningfully exceeds the null "
-            f"benchmark ({null_s:.4f}), {ratio:.1f}x. That is necessary but not "
-            "sufficient: check the deflated Sharpe below, which accounts for the "
-            "trial count.")
+            f"The real search ({real_s:.4f}) exceeds the null benchmark "
+            f"({null_s:.4f}) by {excess:.4f}, clear of the {margin:.4f} that "
+            f"is {scale}. That is necessary but not sufficient: check the "
+            "deflated Sharpe below, which accounts for the trial count.")
 
     return {
         "real_best_raw_sharpe": real_s,
         "null_best_raw_sharpe": null_s,
-        "null_as_fraction_of_real": (null_s / real_s) if real_s else None,
+        "excess_over_null": excess,
+        "indistinguishable_margin": margin,
+        "sample_length": n_obs,
+        # A ratio of two Sharpes is a fraction only when both are positive. For
+        # two negatives it comes out positive and reads like near-agreement
+        # when the null in fact won; across a sign change it comes out negative
+        # and reads like nothing at all. Reported as None rather than as a
+        # number no reader can interpret — `excess_over_null` is the figure
+        # that holds in every regime.
+        "null_as_fraction_of_real": ((null_s / real_s)
+                                     if real_s > 0 and null_s > 0 else None),
         "real_deflated_sharpe": real.get("deflated_sharpe"),
         "null_deflated_sharpe": null.get("deflated_sharpe"),
         "trials": real["trials_run"],
         "indistinguishable_from_noise": indistinguishable,
         "verdict": verdict,
     }
+
+
+def _shared_sample_length(real: dict[str, Any], null: dict[str, Any]) -> int | None:
+    """The sample both searches ran on, or None if neither recorded one.
+
+    Refused rather than reconciled when they disagree: `null_benchmark` shuffles
+    a copy of the same array, so two different lengths mean the null was not the
+    same experiment, and the gap between the Sharpes is then attributable to the
+    sample as much as to the shuffle.
+    """
+    a, b = real.get("n_observations"), null.get("n_observations")
+    if a is not None and b is not None and int(a) != int(b):
+        raise ValueError(
+            f"the real search ran on {int(a):,} observations and the null on "
+            f"{int(b):,}. A null benchmark is the same search over the same "
+            "sample, reshuffled; over a different sample the gap between the "
+            "two Sharpes is not attributable to the shuffle. Re-run the null "
+            "against the same returns.")
+    n = a if a is not None else b
+    return int(n) if n is not None and int(n) > 1 else None
+
+
+def _indistinguishable_margin(sharpe: float, n_observations: int | None
+                              ) -> tuple[float, str]:
+    """The margin, and the phrase naming which of the two terms is binding.
+
+    The sampling term is one standard error of a Sharpe estimate,
+    sqrt((1 + SR^2 / 2) / n) — Lo (2002) eq. (9), for iid returns. The SR^2 / 2
+    part is negligible at the per-period Sharpes this module produces and is
+    kept because dropping it would be a second approximation nobody wrote down.
+
+    Which term binds is worth reporting: "inside one standard error" and
+    "inside a fifth of the Sharpe itself" are different reasons to disbelieve a
+    result, and a reader who is told only the number cannot tell them apart.
+    """
+    relative = 0.2 * abs(sharpe)
+    if n_observations is None:
+        return relative, ("20% of the real search's own Sharpe, no sample "
+                          "length having been recorded")
+    sampling = math.sqrt((1.0 + 0.5 * sharpe ** 2) / n_observations)
+    if sampling >= relative:
+        return sampling, (f"one standard error of a Sharpe over "
+                          f"{n_observations:,} observations")
+    return relative, (f"20% of the real search's own Sharpe, wider than the "
+                      f"{sampling:.4f} that {n_observations:,} observations "
+                      f"can resolve")
 
 
 def _skew(x: np.ndarray) -> float:

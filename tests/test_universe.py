@@ -39,6 +39,10 @@ def _company(cik: int, rows: list[tuple[str, str, float]]) -> str:
 def mirror(tmp_path: Path) -> Mirror:
     path = tmp_path / "cf.zip"
     with zipfile.ZipFile(path, "w") as z:
+        # The non-company entry goes first: in a real archive its position is
+        # not ours to choose, and a limit that counts entries rather than
+        # companies is only visible when something precedes the companies.
+        z.writestr("notacompany.txt", "x")
         # A survivor, a company that restated, and one that stopped filing.
         z.writestr("CIK0000000100.json",
                    _company(100, [("2014-12-31", "2015-03-01", 1_000.0)]))
@@ -48,7 +52,6 @@ def mirror(tmp_path: Path) -> Mirror:
         z.writestr("CIK0000000300.json",
                    _company(300, [("2014-12-31", "2015-03-01", 3_000.0)]))
         z.writestr("CIK0000000400.json", json.dumps({"cik": 400, "facts": {}}))
-        z.writestr("notacompany.txt", "x")
     import hashlib
     path.with_suffix(".zip.manifest.json").write_text(json.dumps({
         "url": "x", "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -69,6 +72,23 @@ def test_candidates_come_in_cik_order_and_nothing_else(mirror):
     ciks = [c for c, _ in candidates(mirror)]
     assert ciks == sorted(ciks)
     assert ciks == [100, 200, 300, 400]
+
+
+def test_a_limit_bounds_companies_not_archive_entries(mirror):
+    """A limit of two means two companies. The mirror applied its limit before
+    the company filter, so the leading non-company entry was charged against the
+    universe: two candidates asked for, one delivered."""
+    assert [cik for cik, _ in candidates(mirror, limit=2)] == [100, 200]
+
+
+def test_a_limit_delivers_that_many_candidates(mirror, store):
+    """`build` promises fundamentals for `limit` companies, and the report is
+    the only place a shortfall could show — except `considered` counts what the
+    mirror handed over, so a limit spent on a README looked like a universe that
+    simply had fewer companies in it."""
+    report = build(mirror, store, "u", limit=2)
+    assert report.considered == 2
+    assert report.entities == ["CIK0000000100", "CIK0000000200"]
 
 
 def test_selection_does_not_read_the_data_first(mirror, store):

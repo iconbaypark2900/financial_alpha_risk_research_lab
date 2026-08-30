@@ -184,15 +184,50 @@ class Mirror:
         return self.read(f"CIK{int(cik):010d}.json")
 
     def iter_ciks(self, limit: int | None = None) -> Iterator[tuple[int, str]]:
-        """Every company in the archive, streamed rather than materialised.
+        """The first `limit` companies in the archive, streamed not materialised.
 
         1.4 GB expands to hundreds of thousands of entries; building a list of
-        them is how a mirror becomes an out-of-memory error.
+        them is how a mirror becomes an out-of-memory error. So the limit stops
+        the walk rather than trimming a finished list, and nothing past the last
+        company yielded is decompressed.
+
+        `limit` counts COMPANIES YIELDED. It used to count entries EXAMINED: the
+        return fired before the CIK filter, so a non-company entry inside the
+        window was charged against the caller's quota and `iter_ciks(limit=1)`
+        on an archive that opens with a README delivered nothing. An archive is
+        not obliged to hold only CIK*.json — the fixtures here model one that
+        does not — and the caller had no way to see the shortfall, because
+        asking for 500 and receiving 480 looks exactly like an archive with 480
+        companies in it.
+
+        A limited walk now continues past the first `limit` entries until it has
+        `limit` companies, so it reaches archive territory the old return never
+        did. An entry named like a company whose CIK is not a number is refused
+        there rather than skipped: this reader identifies companies by name, so
+        a name it cannot read means the archive is not the shape it was told it
+        was, and guessing is how a universe silently changes size. It used to
+        escape as a bare ValueError from inside a generator.
         """
+        if limit is not None and limit < 1:
+            raise MirrorError(
+                f"limit must be at least 1, got {limit}. A limit below one asks "
+                "for no companies, which is never what a caller means; it is "
+                "what arithmetic like `wanted - already_have` produces. Pass "
+                "limit=None for every company in the archive.")
+        yielded = 0
         with self._zip() as archive:
-            for i, name in enumerate(archive.namelist()):
-                if limit is not None and i >= limit:
-                    return
+            for name in archive.namelist():
                 if not name.startswith("CIK") or not name.endswith(".json"):
                     continue
-                yield int(name[3:-5]), archive.read(name).decode("utf-8")
+                digits = name[3:-5]
+                if not digits.isdecimal():
+                    raise MirrorError(
+                        f"{name!r} in {self.path.name} is named like a company "
+                        "entry but its CIK is not a number. This archive is not "
+                        "the shape this reader expects, and guessing which "
+                        "entries are companies is how a universe silently "
+                        "changes size.")
+                yield int(digits), archive.read(name).decode("utf-8")
+                yielded += 1
+                if limit is not None and yielded >= limit:
+                    return

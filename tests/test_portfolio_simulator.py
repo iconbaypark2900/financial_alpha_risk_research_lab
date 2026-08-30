@@ -414,3 +414,57 @@ def test_ruined_paths_are_accepted_by_the_drawdown_primitives():
     assert result.ruin_probability > 0
     for path in result.paths:
         assert 0.0 <= max_drawdown(path) <= 1.0
+
+
+# --- found by review, 2026-08-30 -------------------------------------------
+
+def test_a_rank_deficient_covariance_is_not_simulated_as_a_riskless_arbitrage():
+    """The Kelly conditioning defect, carried through to the number read off.
+
+    Two assets differing by 1e-9 — the ordinary way a sample covariance goes
+    rank-deficient — gave target_weights [+5.3e13, -5.3e13] and a
+    ruin_probability of 0.0. An undefined optimum presented as a riskless
+    arbitrage, which is the most flattering way this could have failed.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.normal(0.0, 0.01, 500)
+    sigma = np.cov([x, x + rng.normal(0.0, 1e-9, 500)])
+    with pytest.raises(KellyError, match="singular"):
+        simulate([0.0005, 0.0004], sigma, seed=7, n_paths=50, horizon=20)
+
+
+def test_a_non_psd_covariance_is_refused_even_with_explicit_weights():
+    """The hole the asymmetry check beside it exists for, one property over.
+
+    Explicit weights bypass portfolio_kelly, and rng.multivariate_normal then
+    draws from a matrix that is not a covariance, saying so in a RuntimeWarning
+    that pytest's default filters hide. [[1e-4, 5e-4], [5e-4, 9e-5]] has a
+    smallest eigenvalue of -4.1e-4 against a largest of 6.0e-4 — most of its
+    spectrum is negative — and it simulated to a terminal mean above its initial
+    value without comment.
+    """
+    not_psd = np.array([[1e-4, 5e-4], [5e-4, 9e-5]])
+    assert np.min(np.linalg.eigvalsh(not_psd)) < 0, "the fixture must be non-PSD"
+    with pytest.raises(SimulationError, match="positive semi-definite"):
+        simulate(MU, not_psd, seed=0, n_paths=5, horizon=10, weights=[0.5, 0.5])
+
+
+def test_a_singular_but_psd_covariance_still_simulates_with_explicit_weights():
+    """The conditioning refusal belongs to the INVERSION, not to the sampling.
+
+    A degenerate Gaussian is a well-defined thing to draw from: two perfectly
+    correlated assets are one asset, and the zero covariance in
+    `test_a_zero_variance_simulation_is_exactly_computable` is the deterministic
+    path this module checks against a closed form. Only inv(S) is undefined, and
+    explicit weights never form it — so extending Kelly's conditioning check
+    into `_validate` would delete that test's premise rather than tighten it.
+
+    Passes before the fix as well as after. It is here to pin the boundary the
+    fix must not cross, not to catch a defect.
+    """
+    perfectly_correlated = np.array([[1e-4, 1e-4], [1e-4, 1e-4]])
+    assert np.linalg.matrix_rank(perfectly_correlated) == 1
+    result = simulate(MU, perfectly_correlated, seed=0, n_paths=20, horizon=30,
+                      weights=[0.5, 0.5])
+    assert np.all(np.isfinite(result.terminal_values))
+    assert result.ruin_probability == 0.0

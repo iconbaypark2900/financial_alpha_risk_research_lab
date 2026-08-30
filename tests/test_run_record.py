@@ -21,9 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.research_integrity.run_record import (  # noqa: E402
     ExperimentLog,
+    NON_UTF8_DIFF_MARKER,
     NotReproducible,
     UncommittedCode,
     canonical_hash,
+    decode_diff,
+    encode_diff,
     git_state,
 )
 
@@ -257,3 +260,263 @@ def test_an_untracked_source_file_does_count(log, clean_repo):
     (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
     with pytest.raises(UncommittedCode, match="secret_strategy.py"):
         log.start("momentum", **BASE)
+
+
+# --- FR-24: untracked source is evidence, not just a flag -------------------
+#
+# Detecting that an untracked .py is unknown code and then storing an empty
+# diff records the DETECTION and discards the EVIDENCE. `git diff HEAD` cannot
+# contain a file git has never been told about, so these tests pin the contents,
+# not the flag.
+
+def _reconstruct(repo: Path, dest: Path, record: dict) -> Path:
+    """Check out the SHA the record names and apply the diff it stored. The only
+    test of a diff that matters is whether it reconstructs the code."""
+    subprocess.run(["git", "clone", "-q", str(repo), str(dest)], check=True)
+    subprocess.run(["git", "checkout", "-q", record["code_sha"]], cwd=dest,
+                   check=True)
+    patch = dest.parent / "recorded.patch"
+    patch.write_bytes(decode_diff(record["code_diff"]))
+    subprocess.run(["git", "apply", str(patch)], cwd=dest, check=True)
+    return dest
+
+
+def test_untracked_source_is_recorded_in_the_diff_not_merely_flagged(log, clean_repo):
+    """The case the module goes out of its way to detect is exactly the case it
+    used to record as code_dirty=1 with an empty diff."""
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+    rec = log.get(run_id)
+
+    assert rec["code_dirty"] == 1
+    assert "EDGE = 42" in rec["code_diff"]
+
+
+def test_the_recorded_diff_reconstructs_the_untracked_code(log, clean_repo, tmp_path):
+    """'A truncated diff cannot reconstruct the code, and reconstructing it is
+    the entire purpose.' So: check out the SHA, apply the diff, compare."""
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\nDEF = 'x'\n")
+    (clean_repo / "strategy.py").write_text("VALUE = 2\n")
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    dest = _reconstruct(clean_repo, tmp_path / "reconstructed", log.get(run_id))
+    assert (dest / "secret_strategy.py").read_text() == "EDGE = 42\nDEF = 'x'\n"
+    assert (dest / "strategy.py").read_text() == "VALUE = 2\n"
+
+
+def test_recording_untracked_code_does_not_touch_the_users_index(log, clean_repo):
+    """Both halves at once. Capturing the file by staging it into the real index
+    would record the evidence by editing the user's repository as a side effect
+    of running a backtest — a control that damages what it observes."""
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
+
+    def state() -> tuple[str, str]:
+        return (subprocess.run(["git", "status", "--porcelain"], cwd=clean_repo,
+                               capture_output=True, text=True).stdout,
+                subprocess.run(["git", "ls-files", "--stage"], cwd=clean_repo,
+                               capture_output=True, text=True).stdout)
+
+    before = state()
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    assert "EDGE = 42" in log.get(run_id)["code_diff"]
+    assert state() == before
+    assert "?? secret_strategy.py" in before[0]
+
+
+def test_untracked_code_that_cannot_be_captured_is_refused(log, clean_repo,
+                                                           monkeypatch):
+    """FR-24's other branch. If the contents cannot be recorded, the run is
+    refused — allow_uncommitted buys a full diff, not an exemption."""
+    from src.research_integrity import run_record
+
+    real = run_record.git_state
+
+    def half_captured(repo):
+        state = real(repo)
+        state["untracked_source"] = ["secret_strategy.py"]
+        state["untracked_unrecorded"] = ["secret_strategy.py"]
+        state["dirty"] = True
+        return state
+
+    monkeypatch.setattr(run_record, "git_state", half_captured)
+    with pytest.raises(UncommittedCode, match="secret_strategy.py"):
+        log.start("momentum", allow_uncommitted=True, **BASE)
+
+
+def test_an_untracked_source_file_with_a_non_ascii_name_is_unknown_code(log,
+                                                                        clean_repo):
+    """git quotes such a path in its default output, so a suffix test against
+    the quoted form ('caf\\303\\251.py') sees no .py and the file was neither
+    detected nor recorded."""
+    (clean_repo / "café.py").write_text("EDGE = 43\n")
+    with pytest.raises(UncommittedCode):
+        log.start("momentum", **BASE)
+
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+    assert "EDGE = 43" in log.get(run_id)["code_diff"]
+
+
+def test_untracked_source_git_reads_as_binary_is_still_reconstructable(
+        log, clean_repo, tmp_path):
+    """A .py holding bytes git calls binary diffs as 'Binary files differ',
+    which reconstructs nothing. The recorded form has to survive that."""
+    payload = b"X = 1\n\x00\xff\xfe not text\n"
+    (clean_repo / "secret_strategy.py").write_bytes(payload)
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    dest = _reconstruct(clean_repo, tmp_path / "reconstructed", log.get(run_id))
+    assert (dest / "secret_strategy.py").read_bytes() == payload
+
+
+def test_the_record_names_the_untracked_files_whose_content_it_captured(log,
+                                                                        clean_repo):
+    """A new-file section in a diff does not say whether git had ever seen the
+    file. Which files were unknown code is a fact about the run."""
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+    assert "secret_strategy.py" in log.get(run_id)["code_untracked"]
+
+
+def test_a_log_written_before_untracked_capture_still_records(tmp_path, clean_repo):
+    """CREATE TABLE IF NOT EXISTS leaves an existing table at its old shape, so
+    an old log would otherwise fail every INSERT after this change."""
+    import sqlite3
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE runs (run_id TEXT PRIMARY KEY, strategy TEXT NOT NULL,"
+            " factors_json TEXT, params_json TEXT NOT NULL, seeds_json TEXT NOT"
+            " NULL, dataset_versions TEXT NOT NULL, code_sha TEXT NOT NULL,"
+            " code_dirty INTEGER NOT NULL, code_diff TEXT, environment_json TEXT"
+            " NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, outcome TEXT,"
+            " result_json TEXT, result_hash TEXT, replay_verified INTEGER)")
+
+    reopened = ExperimentLog(db, repo=clean_repo)
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
+    run_id = reopened.start("momentum", allow_uncommitted=True, **BASE)
+    assert "secret_strategy.py" in reopened.get(run_id)["code_untracked"]
+
+
+# --- FR-23: a seed that restores nothing ------------------------------------
+
+def test_a_numpy_seed_is_refused_because_it_restores_nothing_the_code_uses(log):
+    """np.random.seed() seeds the legacy global RandomState. Every randomised
+    module here uses np.random.default_rng(seed), which never consults it, so
+    recording seeds={'numpy': N} recorded a restoration that never happened."""
+    with pytest.raises(ValueError, match="numpy"):
+        ExperimentLog.restore_seeds({"numpy": 7})
+
+
+def test_an_unrestorable_seed_is_refused_when_the_run_starts(log):
+    """Refusing only at replay means the unusable record already exists, and
+    run records are permanent."""
+    with pytest.raises(ValueError, match="numpy"):
+        log.start("momentum", params={"lookback": 20}, seeds={"numpy": 7},
+                  dataset_versions=["fundamentals@v3"])
+    assert log.query() == []
+
+
+def test_the_legacy_numpy_global_is_restorable_under_its_own_name(log):
+    """What np.random.seed() actually restores, named as what it is."""
+    import numpy as np
+    ExperimentLog.restore_seeds({"numpy_legacy": 7})
+    first = np.random.normal(size=3).tolist()
+    ExperimentLog.restore_seeds({"numpy_legacy": 7})
+    assert np.random.normal(size=3).tolist() == first
+
+
+def legacy_global_draw(lookback: int) -> dict:
+    """Consumes numpy's legacy global RandomState, the one np.random.seed sets."""
+    import numpy as np
+    return {"value": float(np.random.normal(size=lookback).sum())}
+
+
+def test_replay_restores_the_numpy_legacy_global_rather_than_recording_it(log):
+    import numpy as np
+    seeds = {"numpy_legacy": 7}
+    run_id = log.start("momentum", params={"lookback": 20}, seeds=seeds,
+                       dataset_versions=["fundamentals@v3"])
+    ExperimentLog.restore_seeds(seeds)
+    log.finish(run_id, result=legacy_global_draw(20))
+
+    np.random.seed(999)
+    np.random.normal(size=5)
+    assert log.replay(run_id, legacy_global_draw)["reproduced"] is True
+
+
+def generator_draw(lookback: int, seed: int) -> dict:
+    """The shape every randomised module here has: the Generator takes its seed
+    as an argument, so the seed is a PARAMETER of the run."""
+    import numpy as np
+    return {"value": float(np.random.default_rng(seed).normal(size=lookback).sum())}
+
+
+def test_a_generator_seed_is_restored_through_params_not_through_seeds(log):
+    """The honest replacement for seeds={'numpy': N}: replay() re-supplies
+    params, so a default_rng seed recorded there is genuinely restored, while
+    the same seed recorded under 'numpy' would restore nothing."""
+    run_id = log.start("momentum", params={"lookback": 20, "seed": 7},
+                       seeds={"deterministic": 0},
+                       dataset_versions=["fundamentals@v3"])
+    log.finish(run_id, result=generator_draw(20, 7))
+
+    import numpy as np
+    np.random.seed(999)                        # cannot matter, and must not
+    assert log.replay(run_id, generator_draw)["reproduced"] is True
+
+    with pytest.raises(ValueError, match="default_rng"):
+        ExperimentLog.restore_seeds({"numpy_default_rng": 7})
+
+
+# ---- a diff that is text to git but not valid UTF-8 --------------------------
+#
+# `_git` decodes with surrogateescape, so these arrive carrying lone surrogates.
+# sqlite3 cannot encode those: recording the untracked file used to take the
+# whole run down with `UnicodeEncodeError`, which is worse than the empty diff it
+# replaced. git only base64s a file as binary when it contains NUL, so a latin-1
+# source file is diffed as text and reaches storage raw.
+
+LATIN1_SOURCE = b"# strat\xe9gie\nEDGE = 42\n"
+
+
+def test_a_non_utf8_untracked_file_does_not_take_the_run_down(log, clean_repo):
+    (clean_repo / "secret_strategy.py").write_bytes(LATIN1_SOURCE)
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    assert log.get(run_id)["code_dirty"] == 1
+
+
+def test_a_non_utf8_tracked_modification_does_not_take_the_run_down(log, clean_repo):
+    """Not the defect this recording was added for, and it regressed anyway: a
+    single latin-1 comment anywhere in the tree made every run unrecordable."""
+    (clean_repo / "strategy.py").write_bytes(b"# caf\xe9 comment\nVALUE = 2\n")
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    assert log.get(run_id)["code_dirty"] == 1
+
+
+def test_a_non_utf8_diff_still_reconstructs_the_code(log, clean_repo, tmp_path):
+    """The only test of a diff that matters. Byte-for-byte, not str-for-str —
+    a replacement character would satisfy a text comparison and fail to apply."""
+    (clean_repo / "secret_strategy.py").write_bytes(LATIN1_SOURCE)
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    dest = _reconstruct(clean_repo, tmp_path / "reconstructed", log.get(run_id))
+    assert (dest / "secret_strategy.py").read_bytes() == LATIN1_SOURCE
+
+
+def test_an_ordinary_diff_is_stored_as_readable_text(log, clean_repo):
+    """The encoding is a fallback, not a format. A diff someone can read in a
+    sqlite browser must stay one, or the escape hatch has cost everyone."""
+    (clean_repo / "secret_strategy.py").write_text("EDGE = 42\n")
+    run_id = log.start("momentum", allow_uncommitted=True, **BASE)
+
+    stored = log.get(run_id)["code_diff"]
+    assert "EDGE = 42" in stored
+    assert not stored.startswith(NON_UTF8_DIFF_MARKER)
+
+
+def test_encode_diff_round_trips_arbitrary_bytes():
+    raw = b"diff --git a/x b/x\n+# \xe9\xff\xfe not utf-8\n"
+    assert decode_diff(encode_diff(raw.decode("utf-8", "surrogateescape"))) == raw

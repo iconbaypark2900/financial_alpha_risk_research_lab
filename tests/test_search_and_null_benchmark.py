@@ -11,6 +11,7 @@ believing "this is noise", the procedure has to be shown capable of saying
 "this is signal" when there is one. That is the same discriminating check that
 caught a deflated-Sharpe implementation returning a constant.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.research_integrity.search import (  # noqa: E402
+    _kurtosis,
+    _skew,
     compare_to_null,
     crossover_grid,
     moving_average_crossover,
@@ -362,3 +365,195 @@ def test_bad_timing_inputs_are_refused(prices, window):
 
     with pytest.raises(ValueError):
         moving_average_timing(prices, window)
+
+
+# --- the verdict must survive a sign change --------------------------------
+#
+# Every test above this line uses a POSITIVE Sharpe, and that is how the
+# multiplicative `null_s >= real_s * 0.8` rule survived: a 0.8 multiplier moves
+# a positive number down and a negative number UP, so for a losing search the
+# threshold sat above the real Sharpe and the verdict came out inverted. The
+# module's own defaults live in that regime — `moving_average_crossover` scores
+# excess-over-buy-and-hold, and its docstring reports the best of 7,866 SPY
+# variants at -0.0194.
+
+def test_two_negative_sharpes_are_not_a_win_for_the_real_search():
+    """The reproduction, with the module's own documented SPY figure.
+
+    Noise reached -0.0190 and the real search -0.0194: the reshuffled series
+    STRICTLY OUTPERFORMED, and the tool reported the opposite.
+    """
+    out = compare_to_null(
+        {"best_raw_sharpe": -0.0194, "trials_run": 7866, "n_observations": 3770,
+         "deflated_sharpe": 0.0},
+        {"best_raw_sharpe": -0.0190, "n_observations": 3770,
+         "deflated_sharpe": 0.0})
+    assert out["indistinguishable_from_noise"] is True, out["verdict"]
+    assert "NOISE" in out["verdict"]
+    assert "exceeds the null benchmark" not in out["verdict"]
+
+
+def test_the_verdict_says_so_when_noise_actually_won():
+    """A verdict that reports 98% when the null was BETTER reads as a near-miss.
+    The reader has to be told which way round it fell."""
+    out = compare_to_null(
+        {"best_raw_sharpe": -0.0194, "trials_run": 7866, "n_observations": 3770},
+        {"best_raw_sharpe": -0.0190, "n_observations": 3770})
+    assert "higher" in out["verdict"].lower()
+    assert not re.search(r"\d\.\dx", out["verdict"]), (
+        "the verdict still reports a multiple of two negative Sharpes")
+
+
+def test_a_losing_search_that_still_beats_noise_is_not_called_noise():
+    """The other half of the negative regime, and the reason this cannot be
+    fixed by flipping the comparison. A rule that loses to buy-and-hold by
+    0.01 while the reshuffled sweep loses by 0.50 did beat its null.
+
+    (This one also passes against the unfixed code — it is here so a fix that
+    merely inverts the sign is caught.)
+    """
+    out = compare_to_null(
+        {"best_raw_sharpe": -0.01, "trials_run": 100, "n_observations": 400},
+        {"best_raw_sharpe": -0.50, "n_observations": 400})
+    assert out["indistinguishable_from_noise"] is False, out["verdict"]
+    assert "exceeds the null benchmark" in out["verdict"]
+
+
+def test_a_hair_of_a_difference_near_zero_is_not_an_edge():
+    """The same failure at the other end of the scale, and the reason a
+    multiplicative threshold is the wrong shape rather than merely mis-signed.
+
+    0.0002 against 0.0001 is 2x, and 2x of nothing is nothing. A margin
+    proportional to the real Sharpe shrinks to zero exactly where the real
+    Sharpe does, so it certifies noise as signal at the near-zero Sharpes this
+    module's own searches produce.
+    """
+    out = compare_to_null(
+        {"best_raw_sharpe": 0.0002, "trials_run": 7866, "n_observations": 2000},
+        {"best_raw_sharpe": 0.0001, "n_observations": 2000})
+    assert out["indistinguishable_from_noise"] is True, out["verdict"]
+
+
+def test_the_margin_is_measured_in_sampling_variability_not_in_percent():
+    """What replaces the 0.8: the same gap is or is not a difference depending
+    on how much data was behind it. Four hundred observations cannot resolve a
+    0.05 difference in per-period Sharpe; forty thousand can."""
+    real = {"best_raw_sharpe": 0.10, "trials_run": 500}
+    null = {"best_raw_sharpe": 0.05}
+    short = compare_to_null({**real, "n_observations": 400},
+                            {**null, "n_observations": 400})
+    long = compare_to_null({**real, "n_observations": 40_000},
+                           {**null, "n_observations": 40_000})
+    assert short["indistinguishable_from_noise"] is True, short["verdict"]
+    assert long["indistinguishable_from_noise"] is False, long["verdict"]
+
+
+def test_a_null_run_over_a_different_sample_is_refused():
+    """A null benchmark is the SAME search over the SAME returns, reshuffled.
+    Two different sample lengths are two different experiments, and the
+    difference between their Sharpes is not attributable to the shuffle."""
+    with pytest.raises(ValueError, match="same sample"):
+        compare_to_null(
+            {"best_raw_sharpe": 0.02, "trials_run": 500, "n_observations": 2000},
+            {"best_raw_sharpe": 0.01, "n_observations": 1000})
+
+
+def test_the_ratio_is_reported_only_where_it_means_something():
+    """`null / real` is a fraction only when both are positive. For two
+    negatives it is a positive number that reads like agreement, and across a
+    sign change it is negative and reads like nothing at all."""
+    both_positive = compare_to_null(
+        {"best_raw_sharpe": 0.020, "trials_run": 500},
+        {"best_raw_sharpe": 0.019})
+    assert both_positive["null_as_fraction_of_real"] == pytest.approx(0.95)
+
+    for real_s, null_s in ((-0.0194, -0.0190), (-0.0064, 0.0015), (0.02, -0.01)):
+        out = compare_to_null({"best_raw_sharpe": real_s, "trials_run": 500},
+                              {"best_raw_sharpe": null_s})
+        assert out["null_as_fraction_of_real"] is None, (real_s, null_s)
+        assert out["excess_over_null"] == pytest.approx(real_s - null_s)
+
+
+# --- the seam FR-23 replay verifies its deflation through ------------------
+
+def test_the_replay_block_recomputes_the_deflation_rather_than_copying_it(counter):
+    """What keeps FR-09's headline inside FR-23's comparison.
+
+    `with_recorded_deflation` restores the recorded trial count and variance —
+    which a replay cannot re-derive, because they belong to the dataset's whole
+    history — and then RE-DERIVES the deflated Sharpe from them. Handed the same
+    ledger, it must still move when the search's own Sharpe moves, or it is
+    copying the answer out of the record and verifying nothing.
+    """
+    from src.research_integrity.core import deflated_sharpe_ratio
+    from src.research_integrity.search import with_recorded_deflation
+
+    data = noise(1200)
+    result = run_search(data, SMALL_GRID, counter=counter,
+                        dataset_id="ds", search_id="s")
+    recorded = {**result, "n_trials": 50_000, "var_trials": 0.004}
+
+    restored = with_recorded_deflation(result, data, recorded=recorded)
+    assert restored["n_trials"] == 50_000
+    assert restored["deflated_sharpe"] != result["deflated_sharpe"]
+    assert restored["deflated_sharpe"] == pytest.approx(deflated_sharpe_ratio(
+        observed_sharpe=result["best_raw_sharpe"], n_trials=50_000,
+        sample_length=data.size, skewness=float(_skew(data)),
+        kurtosis=float(_kurtosis(data)), var_trials=0.004))
+
+    # The derivation, not a lookup: a different best Sharpe under the same
+    # ledger must produce a different deflated Sharpe.
+    moved = with_recorded_deflation({**result, "best_raw_sharpe": 0.5}, data,
+                                    recorded=recorded)
+    assert moved["deflated_sharpe"] != restored["deflated_sharpe"]
+
+
+def test_the_replay_block_leaves_no_stale_key_from_the_replayed_run(counter):
+    """The two branches of the deflation emit different keys, so restoring one
+    over the other by merging would leave the replayed run's keys behind and
+    the hash could not match — the same false failure, one layer down."""
+    from src.research_integrity.search import with_recorded_deflation
+
+    data = noise(1200)
+    result = run_search(data, SMALL_GRID, counter=counter,
+                        dataset_id="ds", search_id="s")
+    assert "min_backtest_length" in result and "sample_too_short" in result
+
+    # A run recorded before its variance was estimable takes the other branch.
+    restored = with_recorded_deflation(
+        result, data, recorded={**result, "n_trials": 1, "var_trials": None})
+    assert restored["deflated_sharpe"] is None
+    assert "deflated_sharpe_unavailable" in restored
+    assert "min_backtest_length" not in restored
+    assert "sample_too_short" not in restored
+
+
+def test_a_result_with_no_ledger_state_is_refused_not_silently_replayed(counter):
+    """A failed run records `{"error": ...}`. Falling back to the replay's own
+    throwaway counter there would reintroduce the bug quietly."""
+    from src.research_integrity.search import with_recorded_deflation
+
+    data = noise(600)
+    result = run_search(data, SMALL_GRID, counter=counter,
+                        dataset_id="ds", search_id="s")
+    with pytest.raises(ValueError, match="no trial-ledger state"):
+        with_recorded_deflation(result, data, recorded={"error": "boom"})
+
+
+def test_no_positive_sharpe_comparison_got_easier_to_win():
+    """The margin is the WIDER of the two terms, not the sampling one alone.
+
+    At a large per-period Sharpe on a long sample, one standard error is small
+    and a 10% gap clears it — so a sampling-variability margin ON ITS OWN would
+    have called this a result where the old multiplicative rule called it
+    noise. Fixing an inverted verdict must not quietly relax a correct one.
+
+    (This one also passes against the unfixed code; it exists so that the
+    relative term cannot be dropped as redundant.)
+    """
+    out = compare_to_null(
+        {"best_raw_sharpe": 0.50, "trials_run": 500, "n_observations": 2000},
+        {"best_raw_sharpe": 0.45, "n_observations": 2000})
+    assert out["indistinguishable_from_noise"] is True, out["verdict"]
+    assert out["indistinguishable_margin"] == pytest.approx(0.10)
+    assert "20% of the real search's own Sharpe" in out["verdict"]

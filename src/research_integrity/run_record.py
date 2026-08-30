@@ -42,17 +42,66 @@ harsh during exploration, so the usual compromise is a warning. This module
 takes the requirement's other branch: uncommitted code is allowed but the FULL
 DIFF is stored, so the result remains attributable. What is not allowed is a
 result whose code cannot be reconstructed at all.
+
+UNTRACKED SOURCE WAS DETECTED AND THEN DISCARDED (fixed 2026-08-30)
+
+The paragraph above was false in the case it was written for. `git_state` went
+to some trouble to notice that an untracked .py is unknown code — it can be
+imported, so it is — and then recorded the run with `git diff HEAD`, which by
+construction cannot contain a file git has never been told about. That stored
+code_dirty=1 with code_diff='': the module recorded that the code was unknown
+and threw away the evidence of what it was, which is the one thing FR-24 asks
+for. Two smaller versions of the same mistake sat next to it. The diff was
+`.strip()`ed, and a patch missing its final newline is one `git apply` rejects
+as corrupt; and a .py holding bytes git reads as binary diffed to "Binary files
+differ", which reconstructs nothing.
+
+The diff is now built against a COPY of the index in a temporary directory,
+with GIT_INDEX_FILE pointing at the copy and the untracked source files
+intent-to-added (`git add -N`) there, so git emits them as ordinary new-file
+sections of one unified diff. The user's index, working tree and HEAD are never
+written: staging into the real index would mean recording a backtest edits the
+repository being measured, and an interrupted run would leave it edited.
+`--binary` makes the patch reconstruct bytes git will not diff as text, and the
+diff is stored verbatim. Each captured path is then checked against `git diff
+--name-only`, and any untracked source file missing from the diff REFUSES the
+run — FR-24's reject branch, because recording that unknown code ran without
+recording what it was is the state this note exists to describe.
+
+WHAT A RECORDED SEED CAN GUARANTEE (revised 2026-08-30)
+
+`restore_seeds` used to accept seeds={"numpy": N} and call np.random.seed(N).
+That seeds numpy's LEGACY global RandomState and has no effect at all on
+np.random.default_rng(N), the generator every randomised module here actually
+constructs (factors.py, search.py, portfolio/simulator.py). A run recording a
+numpy seed therefore replayed with its randomness unrestored while the record
+said it had been restored, which is worse than recording nothing: it is a claim.
+
+A Generator's seed is an ARGUMENT, not process state, so nothing this module
+does at replay time can install it. It belongs in `params`, where replay()
+re-supplies it to the function and it is genuinely restored. So `"numpy"` is
+refused rather than accepted and ignored, and the legacy global keeps a name
+that says which generator it restores: `"numpy_legacy"`. Refusing follows the
+FR-07 precedent — a warning is read once and then filtered out of the logs.
+
+The cost is on record too: a run already logged with seeds={"numpy": N} is now
+refused by replay() instead of replaying with its randomness unrestored, and
+records are immutable, so those runs cannot be replayed at all. That was already
+their condition — the change is that it is said instead of reported as success.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import platform
 import random
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -70,6 +119,7 @@ CREATE TABLE IF NOT EXISTS runs (
     code_sha          TEXT NOT NULL,
     code_dirty        INTEGER NOT NULL,
     code_diff         TEXT,
+    code_untracked    TEXT,
     environment_json  TEXT NOT NULL,
     started_at        TEXT NOT NULL,
     ended_at          TEXT,
@@ -109,6 +159,51 @@ END;
 """
 
 
+def _seed_python(value: int) -> None:
+    random.seed(value)
+
+
+def _seed_numpy_legacy(value: int) -> None:
+    import numpy as np
+    np.random.seed(value)
+
+
+_SEED_RESTORERS: dict[str, Callable[[int], None]] = {
+    "python": _seed_python,
+    # np.random.seed() sets numpy's LEGACY global RandomState — np.random.normal
+    # and its siblings. The name says so, because it cannot reach a Generator.
+    "numpy_legacy": _seed_numpy_legacy,
+    # A stated claim that nothing random was consumed. There is nothing to put
+    # back; recording the claim is the point.
+    "deterministic": lambda value: None,
+}
+
+_GENERATOR_SEED_REFUSAL = (
+    "np.random.default_rng(seed) takes its seed as an ARGUMENT and never reads "
+    "process-wide state, so no call restore_seeds() can make will install it. "
+    "Put it in params — replay() passes params back to the function, which is "
+    "how a Generator's seed is actually restored — and state what is left with "
+    "seeds={'deterministic': 0}.")
+
+_NUMPY_SEED_REFUSAL = (
+    "'numpy' does not name one generator. np.random.seed() restores the legacy "
+    "global RandomState and nothing else; every randomised module here uses "
+    "np.random.default_rng(seed), which it cannot touch. Use 'numpy_legacy' if "
+    "the run really consumed np.random.* global state. " + _GENERATOR_SEED_REFUSAL)
+
+# Seed names that read as a promise this module cannot keep. Refused rather than
+# accepted and quietly ignored, because a record naming a seed nobody re-applies
+# is a claim of reproducibility — and FR-07's precedent is that a warning is read
+# once and then filtered out of the logs.
+_UNRESTORABLE_SEEDS: dict[str, str] = {
+    "numpy": _NUMPY_SEED_REFUSAL,
+    "np": _NUMPY_SEED_REFUSAL,
+    "numpy_default_rng": _GENERATOR_SEED_REFUSAL,
+    "default_rng": _GENERATOR_SEED_REFUSAL,
+    "numpy_generator": _GENERATOR_SEED_REFUSAL,
+}
+
+
 class UncommittedCode(RuntimeError):
     """FR-24: a result from unknown code is not a result."""
 
@@ -132,17 +227,122 @@ def canonical_hash(obj: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _git(repo: str | Path, *args: str,
+         env: dict[str, str] | None = None) -> str | None:
+    """Run a git command, returning its stdout, or None if git failed.
+
+    The output is NOT stripped. A diff without its final newline is a patch
+    `git apply` rejects as corrupt, which made the stored diff unusable for the
+    reconstruction it exists for. `surrogateescape` keeps a path that is not
+    valid UTF-8 round-trippable back into a git argument, so such a file is
+    still detected instead of taking the whole listing down with it.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(repo), *args], env=env,
+                             capture_output=True, text=True, timeout=30,
+                             errors="surrogateescape")
+        return out.stdout if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+#: Prefix marking a diff that had to be base64-encoded to survive storage.
+#: On its own line at the head of the payload, so a reader that does not know
+#: about it sees the reason rather than a wall of base64.
+NON_UTF8_DIFF_MARKER = "# non-utf-8 diff, base64 of the original bytes:\n"
+
+
+def encode_diff(diff: str | None) -> str | None:
+    """A diff as SQLite can store it, losslessly.
+
+    `_git` decodes with `surrogateescape`, so a source file that is text to git
+    but not valid UTF-8 — a latin-1 comment, say — arrives carrying lone
+    surrogates. sqlite3 cannot encode those, and `start()` died with
+    `UnicodeEncodeError` on any tree containing one. That is worse than the
+    defect this recording was added to fix: before it, an untracked file gave an
+    empty diff; after it, the run could not be recorded at all.
+
+    Truncating or replacing the offending bytes is not available here. FR-24
+    wants the full diff because reconstructing the code is the entire purpose,
+    and a diff with a byte swapped for U+FFFD does not apply.
+
+    So the common case is stored unchanged and stays readable, and only a diff
+    that genuinely cannot round-trip is base64-encoded behind a marker naming
+    what happened. `decode_diff` is the inverse.
+    """
+    if not diff:
+        return diff
+    try:
+        diff.encode("utf-8")
+        return diff
+    except UnicodeEncodeError:
+        raw = diff.encode("utf-8", "surrogateescape")
+        return NON_UTF8_DIFF_MARKER + base64.b64encode(raw).decode("ascii")
+
+
+def decode_diff(stored: str | None) -> bytes:
+    """The bytes `git apply` needs, from whatever `encode_diff` stored."""
+    if not stored:
+        return b""
+    if stored.startswith(NON_UTF8_DIFF_MARKER):
+        return base64.b64decode(stored[len(NON_UTF8_DIFF_MARKER):])
+    return stored.encode("utf-8", "surrogateescape")
+
+
+def _full_diff(repo: str, untracked_source: Sequence[str]) -> tuple[str, list[str]]:
+    """The full diff — untracked source included — and what it failed to hold.
+
+    The full diff, not a summary. A truncated diff cannot reconstruct the code,
+    and reconstructing it is the entire purpose.
+
+    `git diff HEAD` cannot contain an untracked file, because git has no entry
+    for one. So the files are intent-to-added (`git add -N`) into a COPY of the
+    index inside a temporary directory, addressed by GIT_INDEX_FILE. Staging
+    them in the real index would make recording a run edit the repository the
+    run is measuring, and a run that died in between would leave it edited; the
+    copy is deleted with the temporary directory, and the working tree, HEAD and
+    the real index are untouched. Starting from a copy rather than an empty
+    index keeps anything already staged in the diff.
+
+    Returns (diff, unrecorded) where `unrecorded` names untracked source files
+    whose content did not make it in — checked against git's own file list
+    rather than assumed from an exit status. A non-empty list refuses the run.
+    """
+    plain = _git(repo, "diff", "HEAD", "--binary")
+    if not untracked_source:
+        return (plain or ""), []
+
+    with tempfile.TemporaryDirectory(prefix="run_record_index_") as tmp:
+        index = os.path.join(tmp, "index")
+        named = (_git(repo, "rev-parse", "--git-path", "index") or "").strip()
+        real_index = Path(repo, named) if named else None
+        if real_index is not None and real_index.is_file():
+            try:
+                shutil.copyfile(real_index, index)
+            except OSError:
+                return (plain or ""), list(untracked_source)
+
+        env = {**os.environ, "GIT_INDEX_FILE": index}
+        if _git(repo, "add", "-N", "--", *untracked_source, env=env) is None:
+            return (plain or ""), list(untracked_source)
+        # --binary: a .py git reads as binary otherwise diffs to "Binary files
+        # differ", which names the file and reconstructs nothing.
+        diff = _git(repo, "diff", "HEAD", "--binary", env=env)
+        names = _git(repo, "diff", "HEAD", "--name-only", "-z", env=env)
+
+    if diff is None or names is None:
+        return (plain or ""), list(untracked_source)
+    in_diff = {n for n in names.split("\0") if n}
+    return diff, [f for f in untracked_source if f not in in_diff]
+
+
 def git_state(repo: str | Path = ".") -> dict[str, Any]:
     """Commit SHA, dirty flag, and the full diff if dirty (FR-22, FR-24)."""
-    def run(*args: str) -> str | None:
-        try:
-            out = subprocess.run(["git", "-C", str(repo), *args],
-                                 capture_output=True, text=True, timeout=30)
-            return out.stdout.strip() if out.returncode == 0 else None
-        except Exception:
-            return None
-
-    sha = run("rev-parse", "HEAD")
+    # Resolve the top level once: `ls-files` reports paths relative to the
+    # directory git was run in while `diff` reports them from the root, and the
+    # two lists are compared below.
+    top = (_git(repo, "rev-parse", "--show-toplevel") or "").strip() or str(repo)
+    sha = (_git(top, "rev-parse", "HEAD") or "").strip()
 
     # Dirtiness means UNCOMMITTED CODE, not "any file the repo has not seen".
     # Writing the experiment log or a result file inside the repo would
@@ -152,19 +352,27 @@ def git_state(repo: str | Path = ".") -> dict[str, Any]:
     # So: modifications to tracked files always count, and untracked files count
     # only when they are source. An untracked .py can be imported and is
     # genuinely unknown code; an untracked .db is an artifact.
-    tracked = run("status", "--porcelain", "--untracked-files=no") or ""
-    untracked = run("ls-files", "--others", "--exclude-standard") or ""
+    tracked = _git(top, "status", "--porcelain", "--untracked-files=no") or ""
+    # -z, because git's default output QUOTES a path outside ASCII
+    # ("caf\303\251.py"). That form ends in a quote rather than .py, so such a
+    # file was neither counted as source nor passed back to git intelligibly.
+    untracked = (_git(top, "ls-files", "--others", "--exclude-standard", "-z")
+                 or "").split("\0")
     SOURCE_SUFFIXES = (".py", ".pyx", ".sql", ".toml", ".cfg", ".yaml", ".yml")
-    untracked_source = [f for f in untracked.splitlines()
-                        if f.strip().endswith(SOURCE_SUFFIXES)]
+    untracked_source = [f for f in untracked if f.endswith(SOURCE_SUFFIXES)]
     dirty = bool(tracked.strip()) or bool(untracked_source)
+
+    diff, unrecorded = _full_diff(top, untracked_source) if dirty else (None, [])
     return {
         "code_sha": sha or "UNKNOWN",
         "dirty": dirty,
-        # The full diff, not a summary. A truncated diff cannot reconstruct the
-        # code, and reconstructing it is the entire purpose.
-        "diff": (run("diff", "HEAD") or "") if dirty else None,
+        "diff": diff,
         "untracked_source": untracked_source,
+        # Which untracked source the diff actually holds, and which it does not.
+        # The second list is the difference between recording unknown code and
+        # merely noting that some ran.
+        "untracked_recorded": [f for f in untracked_source if f not in unrecorded],
+        "untracked_unrecorded": unrecorded,
     }
 
 
@@ -191,9 +399,14 @@ class ExperimentLog:
     """The permanent, queryable record of every run (FR-22, FR-25).
 
         log = ExperimentLog("runs.db")
-        with log.run("momentum", params={"lookback": 20}, seeds={"numpy": 42},
+        with log.run("momentum", params={"lookback": 20, "seed": 7},
+                     seeds={"python": 42},
                      dataset_versions=["fundamentals@v3"]) as run:
             run.record(backtest(...))
+
+    A np.random.default_rng seed goes in `params` (the "seed" above), not in
+    `seeds`: replay() re-supplies params, which is the only way a Generator's
+    seed is ever put back. See restore_seeds().
     """
 
     def __init__(self, db_path: str | Path = "experiment_log.db",
@@ -202,6 +415,19 @@ class ExperimentLog:
         self.repo = str(repo)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add columns a log written by an earlier version does not have.
+
+        CREATE TABLE IF NOT EXISTS leaves an existing table at its old shape, so
+        without this every INSERT into an older log would fail — and the records
+        already in it cannot be rewritten by design, only read.
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        if "code_untracked" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN code_untracked TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -234,8 +460,19 @@ class ExperimentLog:
                 "seeds is required (FR-22). If the run is genuinely "
                 "deterministic pass {} explicitly via seeds={'deterministic': 0} "
                 "so the claim is on record rather than merely omitted.")
+        self.check_seeds(seeds)
 
         git = git_state(self.repo)
+        if git.get("untracked_unrecorded"):
+            raise UncommittedCode(
+                "untracked source files are present and their contents could "
+                "not be captured into the diff: "
+                f"{', '.join(git['untracked_unrecorded'][:5])}. FR-24 allows "
+                "uncommitted code only when it is recorded as a full diff, and "
+                "allow_uncommitted buys that diff rather than an exemption from "
+                "it. A run stored as dirty with the evidence missing is the "
+                "unknown code the requirement refuses. Commit them, or move "
+                "them out of the tree.")
         if git["dirty"] and not allow_uncommitted:
             detail = ""
             if git.get("untracked_source"):
@@ -257,13 +494,19 @@ class ExperimentLog:
             conn.execute(
                 "INSERT INTO runs (run_id, strategy, factors_json, params_json, "
                 "seeds_json, dataset_versions, code_sha, code_dirty, code_diff, "
-                "environment_json, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "code_untracked, environment_json, started_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, strategy,
                  json.dumps(list(factors or []), sort_keys=True),
                  json.dumps(params, sort_keys=True),
                  json.dumps(seeds, sort_keys=True),
                  json.dumps(list(dataset_versions), sort_keys=True),
-                 git["code_sha"], int(git["dirty"]), git["diff"],
+                 git["code_sha"], int(git["dirty"]), encode_diff(git["diff"]),
+                 # Which files were unknown code is a fact about the run: a
+                 # new-file section in a diff does not say whether git had ever
+                 # seen the file.
+                 json.dumps(git.get("untracked_recorded"))
+                 if git.get("untracked_recorded") else None,
                  json.dumps(environment(), sort_keys=True), _utcnow()))
         return run_id
 
@@ -330,23 +573,43 @@ class ExperimentLog:
                 "result": result}
 
     @staticmethod
-    def restore_seeds(seeds: dict[str, int]) -> None:
-        """Re-apply every recorded seed. Unknown generators are refused rather
-        than skipped, because a silently unseeded generator is precisely what
-        makes a run irreproducible."""
-        for name, value in seeds.items():
-            if name == "python":
-                random.seed(value)
-            elif name == "numpy":
-                import numpy as np
-                np.random.seed(value)
-            elif name == "deterministic":
-                continue
-            else:
+    def check_seeds(seeds: dict[str, int]) -> None:
+        """Refuse a seed source that cannot actually be restored (FR-23).
+
+        Applied when the run STARTS as well as when it is replayed. Run records
+        are permanent, so a record naming a seed nobody can re-apply is a false
+        claim that cannot be corrected afterwards, and the person who would
+        discover it is the one trying to reproduce the result — which is the
+        reader the record exists for.
+        """
+        for name in seeds:
+            if name in _UNRESTORABLE_SEEDS:
+                raise ValueError(
+                    f"seed source {name!r} cannot be restored, so recording it "
+                    "would document reproducibility instead of providing it. "
+                    + _UNRESTORABLE_SEEDS[name])
+            if name not in _SEED_RESTORERS:
                 raise ValueError(
                     f"unknown random source {name!r} in the run record. It was "
                     "seeded at run time but cannot be restored, so this run "
                     "cannot be replayed faithfully.")
+
+    @staticmethod
+    def restore_seeds(seeds: dict[str, int]) -> None:
+        """Re-apply every recorded seed. Unknown generators are refused rather
+        than skipped, because a silently unseeded generator is precisely what
+        makes a run irreproducible.
+
+        What this can and cannot guarantee: it restores PROCESS-WIDE generator
+        state — `random`, and numpy's legacy global RandomState under the name
+        `numpy_legacy`. It cannot reach a np.random.default_rng(seed), whose
+        seed is an argument rather than state; that one is restored by being
+        re-supplied out of `params`. Randomness that arrives through neither
+        route is not restored here, and replay() is what catches it.
+        """
+        ExperimentLog.check_seeds(seeds)
+        for name, value in seeds.items():
+            _SEED_RESTORERS[name](value)
 
     # ---- FR-25: querying ---------------------------------------------------
     def get(self, run_id: str) -> dict[str, Any] | None:

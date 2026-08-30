@@ -235,8 +235,15 @@ def test_a_symmetric_but_non_psd_covariance_is_refused():
 
 
 def test_a_valid_covariance_is_still_accepted():
-    """The PSD check must not reject real covariances, including singular-ish
-    ones that are merely ill-conditioned but genuinely PSD."""
+    """The PSD check must not reject real covariances.
+
+    The docstring here claimed this fixture covered "singular-ish ones that are
+    merely ill-conditioned but genuinely PSD". Its condition number is 1.55, so
+    it never did, and the claim mattered once there was a conditioning bound to
+    be wrong about. The ill-conditioned case is
+    `test_an_ill_conditioned_but_estimable_covariance_is_still_accepted` below,
+    which states the condition number it is pinning. The assertion is unchanged.
+    """
     fine = np.array([[1e-4, 2e-5], [2e-5, 9e-5]])
     assert portfolio_kelly(MU_OK, fine).weights.shape == (2,)
 
@@ -248,6 +255,89 @@ def test_allocations_can_be_compared_and_are_not_ambiguous():
     b = portfolio_kelly(MU_OK, COV_OK)
     assert a == b                      # would raise ValueError before
     assert a != portfolio_kelly(MU_OK, COV_OK, risk_free_rate=0.0001)
+
+
+# --- found by review, 2026-08-30 -------------------------------------------
+
+def test_a_rank_deficient_sample_covariance_is_refused():
+    """THE way a covariance actually goes singular: two assets that move alike.
+
+    `x` and `x + 1e-9 noise` give a sample covariance with eigenvalues
+    [4.6e-19, 2.06e-4] — rank 1 to fifteen digits. It was ACCEPTED and returned
+    weights [+1.05e14, -1.05e14] at 2.1e14 gross leverage, the long/short pair
+    the degenerate direction makes look free. Nothing caught it: the matrix is
+    positive definite on paper so the PSD test passes, and `np.linalg.solve`
+    raises only on EXACT singularity, which this is not.
+    """
+    rng = np.random.default_rng(0)
+    x = rng.normal(0.0, 0.01, 500)
+    sigma = np.cov([x, x + rng.normal(0.0, 1e-9, 500)])
+    assert np.min(np.linalg.eigvalsh(sigma)) > 0, (
+        "the fixture must be PSD — the refusal has to come from the "
+        "conditioning, not from a negative eigenvalue")
+
+    with pytest.raises(KellyError, match="singular"):
+        portfolio_kelly([0.0005, 0.0004], sigma)
+
+
+@pytest.mark.parametrize("scale", [1e-8, 1e-6, 1e-4, 1e-2, 1.0, 1e4])
+def test_the_psd_tolerance_is_relative_to_the_eigenvalue_scale(scale):
+    """The tolerance was `-1e-10 * max(1.0, max|eig|)`, and that `max(1.0, ...)`
+    floor pinned it to an ABSOLUTE -1e-10 for every matrix whose eigenvalues sit
+    below 1 — which is every covariance of returns.
+
+    So one matrix got two answers depending on the units it was quoted in:
+    refused at scale 1, accepted at 1e-4 where its smallest eigenvalue is
+    -5.0e-11. Whether a matrix is a covariance is a property of the matrix, not
+    of whether its entries are daily or annual.
+    """
+    non_psd = np.array([[1.0, 1.0000005], [1.0000005, 1.0]]) * scale
+    assert np.min(np.linalg.eigvalsh(non_psd)) < 0, "the fixture must be non-PSD"
+
+    with pytest.raises(KellyError, match="positive semi-definite"):
+        portfolio_kelly([0.0005, 0.0004], non_psd)
+
+
+@pytest.mark.parametrize("scale", [1e-8, 1e-6, 1e-4, 1e-2, 1.0, 1e4])
+def test_a_sound_covariance_is_accepted_at_every_scale(scale):
+    """The other direction, and what stops the two refusals above from being
+    answered with "refuse more": a well-conditioned PSD matrix has to survive
+    being quoted in any units, including the 1e-8 of squared basis points."""
+    sound = np.array([[4.0, 1.0], [1.0, 2.0]]) * scale
+    assert np.all(np.isfinite(portfolio_kelly([0.0005, 0.0004], sound).weights))
+
+
+def test_an_ill_conditioned_but_estimable_covariance_is_still_accepted():
+    """The conditioning threshold has to separate two regimes, not clear one case.
+
+    A sample covariance of N assets over T days is full rank while N < T and
+    reaches a condition number of only ~3.6e5 at N/T = 0.996, or ~2e6 with
+    one-factor correlation structure at N/T = 0.95. At N >= T it is exactly
+    rank-deficient and the condition number jumps past 1e17. This matrix sits in
+    the first regime at 1e6 and must be answered however unattractive the answer
+    is — a control that fires on ordinary estimated data is not a control.
+    """
+    angle = 0.7
+    rotation = np.array([[math.cos(angle), -math.sin(angle)],
+                         [math.sin(angle), math.cos(angle)]])
+    ill_conditioned = rotation @ np.diag([1e-4, 1e-10]) @ rotation.T
+    assert np.linalg.cond(ill_conditioned) == pytest.approx(1e6, rel=1e-6)
+
+    assert np.all(np.isfinite(
+        portfolio_kelly([0.0005, 0.0004], ill_conditioned).weights))
+
+
+def test_an_all_zero_covariance_is_refused_for_the_right_reason():
+    """Every asset riskless is not a sizing problem with a large answer, it is
+    an unbounded one.
+
+    It was refused, by reaching `np.linalg.solve` and coming back as
+    LinAlgError, and then reported as "the assets are linearly dependent" — true
+    but not the point. Nothing here has any risk to size against, and the fix is
+    to move the riskless asset into `risk_free_rate`, not to drop a column.
+    """
+    with pytest.raises(KellyError, match="riskless"):
+        portfolio_kelly([0.0005, 0.0004], np.zeros((2, 2)))
 
 
 MU_OK = np.array([0.0004, 0.0003])

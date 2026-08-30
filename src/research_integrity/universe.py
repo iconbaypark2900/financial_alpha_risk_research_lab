@@ -75,6 +75,10 @@ def candidates(mirror: Any, limit: int | None = None) -> Iterator[tuple[int, str
 
     Deliberately not sorted by size, history length or data completeness. Each
     of those correlates with having survived.
+
+    `limit` counts companies. The mirror used to spend it on any non-company
+    entry it walked past, so a universe came back short of what was asked for
+    and nothing in the report could show it.
     """
     yield from mirror.iter_ciks(limit=limit)
 
@@ -83,7 +87,14 @@ def build(mirror: Any, store: Any, dataset_id: str, *,
           limit: int = 500,
           tags: dict[str, tuple[str, str, str]] | None = None,
           forms: Sequence[str] = ("10-K",)) -> BuildReport:
-    """Load fundamentals for `limit` companies from `mirror` into `store`.
+    """Load fundamentals for the first `limit` companies in `mirror` into `store`.
+
+    `limit` bounds the CANDIDATES, not the loads: a company that filed none of
+    `tags` is skipped after selection, so `loaded` is `limit` minus the skips.
+    That much was always intended. What was not is that `considered` itself came
+    back below `limit`, because the mirror charged non-company archive entries
+    against the limit before filtering them out. From in here that shortfall
+    looked exactly like an archive that had run out of companies.
 
     Returns a report including how many candidates were skipped and why, because
     a build that silently dropped half of them produced a different universe

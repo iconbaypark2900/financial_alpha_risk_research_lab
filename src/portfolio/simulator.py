@@ -67,7 +67,7 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from .drawdown import throttle
-from .kelly import HALF_KELLY, portfolio_kelly
+from .kelly import HALF_KELLY, _eigenvalue_floor, portfolio_kelly
 
 TRADING_DAYS = 252
 
@@ -147,6 +147,29 @@ def _validate(mu: np.ndarray, sigma: np.ndarray) -> None:
     # filters hide.
     if not np.allclose(sigma, sigma.T, rtol=1e-9, atol=1e-12):
         raise SimulationError("covariance must be symmetric")
+    # PSD, for the same reason and on the same path. Nothing inverts sigma when
+    # `weights` is given, but rng.multivariate_normal still SAMPLES from it, and
+    # it accepts a matrix that is not a covariance with only the RuntimeWarning
+    # "covariance is not symmetric positive-semidefinite" — hidden by pytest's
+    # default filters, and read once and then filtered out of the logs
+    # everywhere else, which is the FR-07 argument for refusing instead.
+    # [[1e-4, 5e-4], [5e-4, 9e-5]] has most of its spectrum negative and
+    # simulated to a terminal mean above its initial value without comment.
+    #
+    # Kelly's CONDITIONING check is deliberately NOT repeated here. That one
+    # belongs to inv(S) and this path never forms it: a degenerate Gaussian is a
+    # well-defined thing to draw from — two perfectly correlated assets are one
+    # asset — and the zero covariance whose terminal value this module checks
+    # against a closed form is exactly such a matrix. Refusing it here would
+    # delete that check rather than tighten anything.
+    eigenvalues = np.linalg.eigvalsh(sigma)
+    smallest = float(np.min(eigenvalues))
+    if smallest < -_eigenvalue_floor(eigenvalues):
+        raise SimulationError(
+            f"covariance is not positive semi-definite (smallest eigenvalue "
+            f"{smallest:.3e} against a largest of "
+            f"{float(np.max(np.abs(eigenvalues))):.3e}), so it is not a "
+            "covariance matrix and draws from it are not returns")
 
 
 def simulate(expected_returns: Sequence[float], covariance, *,
@@ -176,9 +199,13 @@ def simulate(expected_returns: Sequence[float], covariance, *,
     and is far too volatile to trade, which is Thorp's own standing advice.
 
     Raises:
-        SimulationError: on malformed inputs.
-        KellyError: propagated when the Kelly target cannot be computed, rather
-            than falling back to equal weights.
+        SimulationError: on malformed inputs, including a covariance that is not
+            positive semi-definite — checked here as well as in `portfolio_kelly`
+            because explicit `weights` reach `multivariate_normal` without
+            passing through it.
+        KellyError: propagated when the Kelly target cannot be computed — a
+            singular or ill-conditioned covariance among them — rather than
+            falling back to equal weights.
     """
     mu = np.asarray(expected_returns, dtype=float)
     sigma = np.asarray(covariance, dtype=float)

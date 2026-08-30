@@ -45,7 +45,7 @@ capability: the controls must exist before the thing they constrain.
 | Backtest engine — NautilusTrader, event-driven, audited | built | `backtest.py` |
 | Factor library — small, each factor unit-tested against known values | built | `factors.py` |
 
-508 tests pass, on every push. Two caveats the row labels are too small to hold:
+566 tests pass, on every push. Two caveats the row labels are too small to hold:
 
 - **The experiment log is SQLite, not MLflow — ratified 2026-08-28.** The PRD
   names MLflow, which *logs* and never checks whether a run reproduces. FR-23
@@ -64,7 +64,7 @@ capability: the controls must exist before the thing they constrain.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[all]'                  # or: -r requirements.txt
-.venv/bin/python -m pytest -q                      # 508 passed
+.venv/bin/python -m pytest -q                      # 566 passed
 .venv/bin/python scripts/null_benchmark_demo.py    # acceptance criteria 4 & 5
 .venv/bin/python scripts/readme_tables.py          # regenerate this page's tables
 ```
@@ -73,7 +73,7 @@ Python 3.12 or later — numpy and `nautilus_trader` both require it, and the
 latter caps at 3.15. CI runs 3.12, 3.13 and 3.14.
 
 **The optional slices are genuinely optional.** `pip install -e .` gives numpy
-alone and runs **338 of the 508 tests**; the point-in-time store and the engine
+alone and runs **401 of the 566 tests**; the point-in-time store and the engine
 degrade to `None` and their tests skip. `[store]` adds DuckDB, `[engine]` adds
 NautilusTrader, `[all]` adds both plus pytest. A CI job installs the minimal
 form and asserts the degradation, because that claim had been checked only by
@@ -1184,9 +1184,13 @@ the closes that have arrived, so both apply to the same number.
 from src.research_integrity import ExperimentLog
 
 log = ExperimentLog("runs.db", repo=".")
-with log.run("momentum", params={"lookback": 20}, seeds={"numpy": 42},
+# A Generator's seed is an argument, not process state, so it goes in params
+# where replay() re-supplies it. "numpy" as a seed SOURCE is refused: it would
+# seed the legacy global, which nothing in this package draws from.
+with log.run("momentum", params={"lookback": 20, "rng_seed": 42},
+             seeds={"python": 7},
              dataset_versions=["fundamentals@v3"], factors=["value"]) as run:
-    run.record(backtest(lookback=20))
+    run.record(backtest(lookback=20, rng_seed=42))
 
 log.replay(run_id, backtest)     # re-executes and requires an identical hash
 log.query(strategy="momentum", since="2024-01-01", outcome="completed")

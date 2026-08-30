@@ -248,22 +248,75 @@ class Study:
         like new research. That is the one place where re-running a backtest
         should not touch the counter, and it is worth being explicit about
         because everything else in this package argues the opposite.
+
+        WHY THE LEDGER STATE IS RESTORED FROM THE RECORD
+
+        The throwaway counter had a consequence nobody had run into, because
+        every test and demo replayed the first and only search on a fresh
+        workspace. `run_search` embeds the live counter's state in its result —
+        `n_trials`, `var_trials`, and the deflated Sharpe, minimum backtest
+        length and sample-length verdict derived from them. Those grow with the
+        DATASET's whole history by design (FR-08: every trial by anyone, ever),
+        while the replay's throwaway counter sees only its own param sets. So
+        from the second search onward the hashes could not match, and the
+        replay reported a reproducibility failure whose message blamed "an
+        unrecorded seed, an environment difference, or uncommitted code" — none
+        of which was the cause — and stamped the run replay_verified=0
+        permanently. `--home`, whose stated purpose is that the count
+        "accumulates across runs", was what triggered it. run_record.py's own
+        docstring names this hazard: false failures "teach everyone to ignore
+        them".
+
+        So the replay reads `n_trials` and `var_trials` back from the record and
+        recomputes the derived figures from them, via the same code path the run
+        used. The counter is still throwaway and still untouched.
+
+        The rejected alternative was to drop the ledger-derived keys from the
+        comparison. It is fewer lines and it would make these tests pass, but
+        the deflated Sharpe is FR-09's headline figure, and dropping it means a
+        replay stops checking the one number the whole package is built to
+        produce — including whether it is consistent with the burden the run
+        recorded. Restoring the inputs and recomputing the outputs keeps that
+        check; excluding them removes it. A replay that verifies less is how
+        FR-23 came to be marked met in the first place.
+
+        What is NOT verified either way is the recorded ledger state itself. A
+        replay cannot reconstruct a past global count — that is what makes it
+        global. It is defended where it is written instead: the trials table is
+        append-only by trigger. The run record's own trigger guards
+        `result_hash` but not `result_json`, so a doctored count in the stored
+        result surfaces here as a replay failure rather than being believed —
+        which is a consequence of restoring these keys, and would not hold if
+        they were excluded.
         """
+        import json
         import tempfile
 
-        from .search import run_search
+        from .search import run_search, with_recorded_deflation
         from .trial_counter import TrialCounter
+
+        record = self.log.get(run_id)
+        if record is None:
+            raise ValueError(f"unknown run {run_id!r}")
+        recorded = json.loads(record["result_json"] or "{}")
+        if "n_trials" not in recorded:
+            raise StudyError(
+                f"run {run_id!r} recorded no trial-ledger state (outcome "
+                f"{record['outcome']!r}). Only a completed search records one, "
+                "so there is nothing here to replay a deflation against.")
 
         def recompute(*, entity_id: str, field: str, start, end,
                       knowledge_date, param_sets, search_id=None, **ignored):
             _, values = self.store.series(self.dataset_id, entity_id, field,
                                           start=start, end=end,
                                           knowledge_date=knowledge_date)
+            returns = _simple_returns(values)
             with tempfile.TemporaryDirectory() as tmp:
-                return run_search(
-                    _simple_returns(values), param_sets,
+                result = run_search(
+                    returns, param_sets,
                     counter=TrialCounter(Path(tmp) / "replay.db"),
                     dataset_id=self.dataset_id, search_id=search_id)
+            return with_recorded_deflation(result, returns, recorded=recorded)
 
         return self.log.replay(run_id, recompute)
 

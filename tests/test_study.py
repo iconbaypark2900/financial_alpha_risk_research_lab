@@ -357,3 +357,134 @@ def test_no_control_is_orphaned():
             f"{requirement}: nothing outside {home} calls {call!r}. The control "
             "exists, its own tests pass, and it constrains nothing — which is "
             "the state src/research_integrity/study.py was written to end.")
+
+
+# --- FR-23 in the regime FR-08 creates: a workspace that accumulates --------
+#
+# Every replay test above this line replays the FIRST and ONLY search on a fresh
+# workspace, where the live counter and a throwaway one happen to agree. The
+# `--home` flag exists precisely so the count does NOT reset between runs
+# (FR-08: "across all researchers and all time"), and from the second search
+# onward the recorded counter state and a replay-local one cannot agree.
+
+def test_a_second_search_on_the_same_workspace_still_replays(study):
+    """The workspace's whole purpose, and what it used to cost.
+
+    The trial count grows with the dataset's history BY DESIGN, so the second
+    search records a larger `n_trials`, a different `var_trials` and therefore
+    a different deflated Sharpe. None of that is a reproducibility failure: it
+    is FR-08 working. The replay used to report it as one, blaming "an
+    unrecorded seed, an environment difference, or uncommitted code" — none of
+    which was the cause — and stamp the run replay_verified=0 permanently.
+    """
+    first = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    assert study.replay_search(first["run_id"])["reproduced"] is True
+
+    second = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    assert second["n_trials"] > first["n_trials"], (
+        "the counter did not accumulate, so this fixture no longer exercises "
+        "the regime the --home flag exists for")
+
+    assert study.replay_search(second["run_id"])["reproduced"] is True
+    assert study.log.get(second["run_id"])["replay_verified"] == 1
+
+
+def test_a_replay_reports_the_trial_count_the_run_was_deflated_against(study):
+    """The recorded burden is what the replay must attest to, not a smaller one.
+
+    Dropping the counter block from the comparison would also make a replay
+    silently agree with a run deflated against 24 trials when 7,866 were
+    recorded. The replayed result carries the RECORDED ledger state.
+    """
+    study.search_series("PRICE", GRID, allow_uncommitted=True)
+    second = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    replayed = study.replay_search(second["run_id"])["result"]
+    assert replayed["n_trials"] == second["n_trials"] == 2 * len(GRID)
+    assert replayed["var_trials"] == second["var_trials"]
+    assert replayed["deflated_sharpe"] == second["deflated_sharpe"]
+
+
+def test_the_second_search_still_fails_its_replay_when_the_data_changes(study):
+    """The teeth, in the regime the fix touches.
+
+    A replay that cannot fail verifies nothing, so the accumulated case must
+    still break on data that genuinely changed — otherwise the fix bought a
+    clean replay by removing the check.
+    """
+    from src.research_integrity.run_record import NotReproducible
+
+    study.search_series("PRICE", GRID, allow_uncommitted=True)
+    second = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    gap = "2019-01-05"                       # a weekend the fixture skipped
+    dates = study.store.series("sp500", "PRICE", "close")[0]
+    assert gap not in dates and dates[0] < gap < dates[-1]
+    study.store.append_facts("sp500", [
+        {"entity_id": "PRICE", "field": "close", "value": 123.45,
+         "effective_date": gap, "knowledge_date": gap},
+    ])
+    with pytest.raises(NotReproducible, match="did not reproduce"):
+        study.replay_search(second["run_id"])
+
+
+def test_a_replay_still_does_not_inflate_the_count_on_a_used_workspace(study):
+    """The reason the throwaway counter exists, re-pinned for the second search.
+
+    A replay re-executes a search that was already counted. If restoring the
+    recorded ledger state had been done by writing to the live counter, this is
+    the test that would catch it.
+    """
+    study.search_series("PRICE", GRID, allow_uncommitted=True)
+    second = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    before = study.counter.trial_count("sp500")
+    study.replay_search(second["run_id"])
+    assert study.counter.trial_count("sp500") == before
+
+
+def test_a_doctored_trial_count_in_the_record_still_fails_the_replay(study):
+    """Why the ledger block is RESTORED from the record rather than excluded
+    from the comparison.
+
+    Understating the burden is the one edit that flatters a result: the deflated
+    Sharpe rises as the trial count falls. Excluding the counter-derived keys
+    would have made a replay blind to exactly that. Restoring `n_trials` and
+    re-deriving the deflated Sharpe from it means a record claiming a deflated
+    Sharpe its own trial count does not support no longer reproduces.
+
+    (This one also passes against the unfixed code, where the second search's
+    replay failed for its own reason. It is here so the fix cannot be weakened
+    into the excluding version without something going red.)
+    """
+    import json
+    import sqlite3
+
+    from src.research_integrity.run_record import NotReproducible
+
+    study.search_series("PRICE", GRID, allow_uncommitted=True)
+    second = study.search_series("PRICE", GRID, allow_uncommitted=True)
+    assert study.replay_search(second["run_id"])["reproduced"] is True
+
+    # The write-once trigger guards result_hash, not result_json, so the stored
+    # result and the hash of the real one can be made to disagree.
+    conn = sqlite3.connect(study.log.db_path)
+    stored = json.loads(conn.execute(
+        "SELECT result_json FROM runs WHERE run_id = ?",
+        (second["run_id"],)).fetchone()[0])
+    conn.execute("UPDATE runs SET result_json = ? WHERE run_id = ?",
+                 (json.dumps({**stored, "n_trials": len(GRID)}, sort_keys=True),
+                  second["run_id"]))
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(NotReproducible, match="did not reproduce"):
+        study.replay_search(second["run_id"])
+
+
+def test_a_run_with_no_recorded_ledger_state_is_refused(study):
+    """FR-07's precedent: refuse rather than warn. Falling back to the replay's
+    own throwaway counter for a run that recorded no trial count is how the
+    original bug would come back silently."""
+    with pytest.raises(Exception):
+        study.search(np.array([]), GRID, start="2015-01-01", end="2019-12-31")
+    failed = study.log.query(outcome="failed")[0]["run_id"]
+    with pytest.raises(StudyError, match="no trial-ledger state"):
+        study.replay_search(failed)

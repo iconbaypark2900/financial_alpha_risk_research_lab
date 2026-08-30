@@ -63,6 +63,48 @@ class KellyError(ValueError):
 # Thorp's standing recommendation, and the reason `fractional` exists at all.
 HALF_KELLY = 0.5
 
+# The condition number above which inv(S) is not a portfolio. The solve loses
+# about log10(cond(S)) of the sixteen significant decimal digits a float64
+# carries, so at 1/sqrt(eps) = 6.7e7 half of them are gone — but the reason to
+# draw the line THERE is where the two regimes actually sit, not that half is a
+# natural amount to lose. A sample covariance of N assets over T days is full
+# rank while N < T and reaches a condition number of only about 3.6e5 at
+# N/T = 0.996, or 2e6 with one-factor correlation structure at N/T = 0.95. At
+# N >= T it is exactly rank-deficient and the condition number jumps past 1e17.
+# Ten orders of magnitude separate ordinary estimation from rank deficiency, and
+# 6.7e7 sits in the empty middle of them.
+#
+# The looser 1/eps = 4.5e15 — the point at which the solve has NO correct digits
+# left — is demonstrably too weak to be the line: two assets differing by 1e-9
+# give a condition number of 4.4e14 and 2.1e14 gross leverage, and 1/eps accepts
+# them. Refusing only what floating point cannot represent is not the same as
+# refusing what cannot be answered.
+MAX_CONDITION_NUMBER = 1.0 / math.sqrt(np.finfo(float).eps)
+
+
+def _eigenvalue_floor(eigenvalues: np.ndarray) -> float:
+    """The magnitude below which an eigenvalue cannot be told apart from zero.
+
+    RELATIVE to the matrix's own scale, which is the entire point. The tolerance
+    here was `-1e-10 * max(1.0, max|eig|)`, and that `max(1.0, ...)` pinned it to
+    an ABSOLUTE -1e-10 for every matrix whose eigenvalues fall below 1 — which is
+    every covariance of returns. A daily covariance at eigenvalue scale 1e-4 that
+    is non-PSD at -5.0e-11 is wrong by four orders of magnitude relative to
+    itself, and was accepted.
+
+    One floor answers both of the questions `portfolio_kelly` asks below.
+    Smaller than this in magnitude and the matrix is numerically singular; more
+    negative than its negation and the matrix is not a covariance at all. The two
+    checks meet exactly here, so nothing can pass by landing in a gap between
+    them, and an eigenvalue too small to invert is reported as singular rather
+    than as negative — which is the truer of the two things to say about it.
+
+    Shared with `simulator._validate`, which repeats the PSD half on the path
+    that supplies explicit weights. Repeating the number instead would be the
+    drift that module's own comments complain about.
+    """
+    return float(np.max(np.abs(eigenvalues))) / MAX_CONDITION_NUMBER
+
 
 def kelly_fraction(win_prob: float, win_loss_ratio: float) -> float:
     """Single-bet Kelly: f* = (b*p - q) / b, with b the win/loss ratio.
@@ -176,11 +218,22 @@ def portfolio_kelly(expected_returns, covariance, *,
     the risk-free asset rather than a fully-invested portfolio.
 
     Raises:
-        KellyError: on shape mismatch, non-finite input, or a singular
-            covariance — which is NOT silently replaced with equal weights, as
-            the source did. A singular covariance means the assets are linearly
-            dependent and the optimum is undefined; answering anyway hides a
-            data problem behind a plausible portfolio.
+        KellyError: on shape mismatch, non-finite input, or a covariance that
+            cannot be turned into a portfolio — not positive semi-definite, or
+            numerically singular. Neither is silently replaced with equal
+            weights, as the source did. A singular covariance means the assets
+            are linearly dependent and the optimum is undefined; answering
+            anyway hides a data problem behind a plausible portfolio.
+
+            That paragraph stood here before the code did it. The refusal rested
+            on `np.linalg.solve`, which raises only on EXACT singularity, and on
+            a PSD tolerance whose `max(1.0, ...)` floor made it an ABSOLUTE
+            -1e-10 that did not scale with the data. Two assets differing by
+            1e-9 — the ordinary way a sample covariance goes rank-deficient, not
+            an exotic input — were accepted and sized at 2.1e14 gross leverage,
+            and through the simulator that came out as ruin probability 0.0: an
+            undefined optimum presented as a riskless arbitrage. Both tolerances
+            are now relative to the eigenvalue scale, at `MAX_CONDITION_NUMBER`.
     """
     mu = np.asarray(expected_returns, dtype=float)
     sigma = np.asarray(covariance, dtype=float)
@@ -208,21 +261,56 @@ def portfolio_kelly(expected_returns, covariance, *,
     # negative eigenvalue is not a covariance, solves without complaint, and
     # returns a plausible-looking portfolio: [[1e-4, 5e-4], [5e-4, 9e-5]] gave
     # weights [0.473, 0.705] at leverage 1.18. np.linalg.solve raises only on
-    # EXACT singularity, so the docstring's argument below — that answering
+    # EXACT singularity, so the docstring's argument above — that answering
     # anyway hides a data problem behind a plausible portfolio — applies here at
-    # least as strongly.
+    # least as strongly, and the eigenvalues decide both questions rather than
+    # LAPACK deciding one of them by accident.
     eigenvalues = np.linalg.eigvalsh(sigma)
-    tolerance = -1e-10 * max(1.0, float(np.max(np.abs(eigenvalues))))
-    if float(np.min(eigenvalues)) < tolerance:
+    scale = float(np.max(np.abs(eigenvalues)))
+    if scale == 0.0:
+        raise KellyError(
+            "covariance is all zeros, so every asset is riskless and the Kelly "
+            "optimum is unbounded rather than merely large — a riskless asset "
+            "belongs in `risk_free_rate`, not in the covariance")
+
+    floor = _eigenvalue_floor(eigenvalues)
+    smallest = float(np.min(eigenvalues))
+    if smallest < -floor:
         raise KellyError(
             f"covariance is not positive semi-definite (smallest eigenvalue "
-            f"{float(np.min(eigenvalues)):.3e}), so it is not a covariance "
-            "matrix and the Kelly optimum is undefined")
+            f"{smallest:.3e} against a largest of {scale:.3e}, tolerance "
+            f"{-floor:.3e}), so it is not a covariance matrix and the Kelly "
+            "optimum is undefined. Symmetrise the estimator or shrink it "
+            "towards a diagonal; do not clip the eigenvalue, which changes the "
+            "answer without recording that it did")
+
+    # Rank, not just sign. An eigenvalue below the floor is zero as far as the
+    # inversion is concerned, and inv(S) then multiplies whatever error
+    # `expected_returns` carries along that direction by the condition number —
+    # which is where 1e14 leverage comes from, and why the leverage looks free.
+    smallest_magnitude = float(np.min(np.abs(eigenvalues)))
+    if smallest_magnitude < floor:
+        condition = (math.inf if smallest_magnitude == 0.0
+                     else scale / smallest_magnitude)
+        raise KellyError(
+            f"covariance is numerically singular (condition number "
+            f"{condition:.3e}, limit {MAX_CONDITION_NUMBER:.3e}), so the Kelly "
+            "optimum is undefined — the assets are linearly dependent to within "
+            "floating point, and inv(S) multiplies any error in "
+            "expected_returns by that factor. finGuard fell back to equal "
+            "weights here, which turns a data problem into a portfolio. Drop "
+            "the dependent asset, or estimate the covariance over a window "
+            "longer than it has assets")
 
     excess = mu - risk_free_rate
     try:
         weights = np.linalg.solve(sigma, excess)
     except np.linalg.LinAlgError as exc:
+        # Unreachable at this point: an exactly singular matrix has a zero
+        # eigenvalue and is refused above. Kept so that every way this function
+        # can fail is a KellyError, not so that it catches anything — the
+        # defence moved off `solve` deliberately, because resting on it is what
+        # let 2.1e14 leverage through.
         raise KellyError(
             "covariance is singular, so the Kelly optimum is undefined — the "
             "assets are linearly dependent. finGuard fell back to equal weights "

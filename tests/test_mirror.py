@@ -32,9 +32,12 @@ BBBY = json.dumps({"cik": 886158, "units": {"USD": [
 def archive(tmp_path: Path) -> Path:
     path = tmp_path / "companyfacts.zip"
     with zipfile.ZipFile(path, "w") as z:
+        # The non-company entry goes FIRST. Where it sits is not ours to choose
+        # in a real archive, and a fixture that buries it at the end cannot tell
+        # a limit that counts companies apart from one that counts entries.
+        z.writestr("README.txt", "not a company")
         z.writestr("CIK0000320193.json", AAPL)
         z.writestr("CIK0000886158.json", BBBY)
-        z.writestr("README.txt", "not a company")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     path.with_suffix(".zip.manifest.json").write_text(json.dumps({
         "url": "https://example.invalid/companyfacts.zip",
@@ -104,10 +107,62 @@ def test_iteration_skips_non_company_entries(mirror):
     assert set(ciks) == {320193, 886158}, "README.txt must not be treated as a company"
 
 
-def test_iteration_respects_a_limit(mirror):
+def test_a_limit_counts_companies_not_archive_entries(mirror):
+    """`limit=1` has to deliver one COMPANY.
+
+    The limit was applied before the CIK filter, so every non-company entry
+    inside the window was charged against the caller's quota. This archive opens
+    with README.txt, so `iter_ciks(limit=1)` delivered nothing at all.
+
+    What stood here was `len(list(mirror.iter_ciks(limit=1))) <= 1`, which is
+    satisfied by yielding nothing: it could not distinguish a limit that was
+    honoured from a limit that ate the only company asked for.
+    """
+    assert [cik for cik, _ in mirror.iter_ciks(limit=1)] == [320193]
+    assert [cik for cik, _ in mirror.iter_ciks(limit=2)] == [320193, 886158]
+    assert [cik for cik, _ in mirror.iter_ciks(limit=99)] == [320193, 886158]
+
+
+def test_a_limit_stops_reading_the_archive(mirror, monkeypatch):
     """1.4 GB expands to hundreds of thousands of entries; materialising them is
-    how a mirror becomes an out-of-memory error."""
-    assert len(list(mirror.iter_ciks(limit=1))) <= 1
+    how a mirror becomes an out-of-memory error. So the limit has to bound the
+    decompression too: filtering the whole namelist and then slicing the result
+    would satisfy the counts above while still reading every company on disk."""
+    read: list[str] = []
+    original = zipfile.ZipFile.read
+
+    def recording(self, name, *args, **kwargs):
+        read.append(name if isinstance(name, str) else name.filename)
+        return original(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", recording)
+    assert len(list(mirror.iter_ciks(limit=1))) == 1
+    assert read == ["CIK0000320193.json"], "entries past the limit were read anyway"
+
+
+def test_a_limit_below_one_is_refused(mirror):
+    """Prefer refusing to delivering nothing quietly. `limit=0` — what an
+    arithmetic slip like `wanted - already_have` produces — returned an empty
+    iterator indistinguishable from an archive containing no companies."""
+    with pytest.raises(MirrorError, match="limit must be at least 1"):
+        list(mirror.iter_ciks(limit=0))
+
+
+def test_an_entry_named_like_a_company_but_not_numbered_is_refused(tmp_path):
+    """`CIKindex.json` escaped as a bare `ValueError: invalid literal for int()`
+    from inside a generator, taking a whole universe build with it. The limit fix
+    makes it more reachable, because a limited walk now continues past the first
+    `limit` entries until it has that many companies.
+
+    Skipping it quietly would be worse than refusing. This reader identifies
+    companies by their names, so a name it cannot read means the archive is not
+    the shape it was told it was."""
+    path = tmp_path / "odd.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("CIKindex.json", "{}")
+        z.writestr("CIK0000000100.json", "{}")
+    with pytest.raises(MirrorError, match="CIK is not a number"):
+        list(Mirror(path=path).iter_ciks())
 
 
 def test_a_corrupt_archive_is_refused(tmp_path):
