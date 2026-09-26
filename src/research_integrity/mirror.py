@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..perf import AdapterCache, CallMetrics, PerformanceReport, enforce_timeout, should_terminate
+from perf import AdapterCache, CallMetrics, PerformanceReport, enforce_timeout, should_terminate
 
 CHUNK = 1 << 20
 MANIFEST_SUFFIX = ".manifest.json"
@@ -68,7 +68,9 @@ _MIRROR_CACHE = AdapterCache(max_size=5)
 
 class Mirror:
     """A downloaded archive plus the manifest that identifies it."""
-    path: Path
+    
+    def __init__(self, path: Path):
+        self.path = path
 
     # ---- acquiring ---------------------------------------------------------
     @classmethod
@@ -109,7 +111,7 @@ class Mirror:
         if dest.exists() and not force:
             try:
                 if mirror.verify():
-                    _MIRROR_CACHE.set(cache_key, mirror)
+                    _MIRROR_CACHE.put(cache_key, value=mirror)
                     return mirror
             except MirrorError:
                 pass                       # no manifest, or it disagrees: refetch
@@ -155,7 +157,7 @@ class Mirror:
         }, indent=2), encoding="utf-8")
 
         # Cache the result
-        _MIRROR_CACHE.set(cache_key, mirror)
+        _MIRROR_CACHE.put(cache_key, value=mirror)
         return mirror
 
     # ---- identity ----------------------------------------------------------

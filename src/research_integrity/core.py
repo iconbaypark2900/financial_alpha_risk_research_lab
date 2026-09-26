@@ -260,6 +260,10 @@ def evaluate(
     }
 
 
+# Module alias for import convenience
+ri = __import__(__name__)
+
+
 if __name__ == "__main__":
     # The DSR paper's worked example (p.10), in this module's per-period units:
     # N=100, V[SR]=1/2 annualised, T=1250, g3=-3, g4=10, SR=2.5 annualised.

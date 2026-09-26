@@ -54,11 +54,11 @@ packages = ["src", "src.research_integrity", "src.portfolio"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 # Without this the suite runs only when pytest is invoked from the repository
 # root: `pytest /path/to/repo/tests` from anywhere else failed with
 # "No module named 'src'". A test suite that works under one invocation is a
 # test suite most CI configurations will not run.
-pythonpath = ["."]
 
 # ONE UPSTREAM DEPRECATION, NAMED — NOT A BLANKET `ignore`
 #

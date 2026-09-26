@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Iterator, Sequence
 
-from ..perf import AdapterCache, enforce_timeout, should_terminate
+from perf import AdapterCache, enforce_timeout, should_terminate
 
 DEFAULT_TAGS = {
     "book_equity": ("StockholdersEquity", "us-gaap", "USD"),
@@ -118,7 +118,7 @@ def build(mirror: Any, store: Any, dataset_id: str, *,
     - LRU cache: keyed on (dataset_id, limit, tags)
     """
     # Budget-aware early termination
-    if should_terminate():
+    if should_terminate(get_global_budget_tracker()):
         return BuildReport(dataset_id=dataset_id, mirror_version="budget_exceeded")
 
     # Check cache

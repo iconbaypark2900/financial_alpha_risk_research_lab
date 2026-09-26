@@ -98,3 +98,196 @@ class PerformanceReport:
             "calls_by_service": dict(self.calls_by_service),
             "calls_by_tier": dict(self.calls_by_tier),
             "errors": self.errors,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Adapter cache (LRU)                                                         #
+# --------------------------------------------------------------------------- #
+class AdapterCache:
+    """LRU cache for adapter calls."""
+
+    def __init__(self, max_size: int = 100):
+        self.max_size = max_size
+        self._cache: dict[str, Any] = {}
+        self._order: list[str] = []
+
+    def _make_key(self, *args: Any, **kwargs: Any) -> str:
+        key_data = json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True, default=str)
+        return hashlib.sha256(key_data.encode()).hexdigest()[:32]
+
+    def get(self, *args: Any, **kwargs: Any) -> Any | None:
+        key = self._make_key(*args, **kwargs)
+        if key in self._cache:
+            self._order.remove(key)
+            self._order.append(key)
+            return self._cache[key]
+        return None
+
+    def put(self, *args: Any, value: Any, **kwargs: Any) -> None:
+        key = self._make_key(*args, **kwargs)
+        if key in self._cache:
+            self._order.remove(key)
+        self._cache[key] = value
+        self._order.append(key)
+        if len(self._cache) > self.max_size:
+            lru_key = self._order.pop(0)
+            del self._cache[lru_key]
+
+    def clear(self) -> None:
+        self._cache.clear()
+        self._order.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Timeout enforcement                                                         #
+# --------------------------------------------------------------------------- #
+def enforce_timeout(timeout: float = 60.0):
+    """Decorator that enforces a wall-clock timeout."""
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            start = time.monotonic()
+            result = func(*args, **kwargs)
+            elapsed = time.monotonic() - start
+            if elapsed > timeout:
+                raise TimeoutError(f"{func.__name__} exceeded {timeout}s timeout")
+            return result
+        return wrapper
+    return decorator
+
+
+# --------------------------------------------------------------------------- #
+# Budget-aware termination                                                    #
+# --------------------------------------------------------------------------- #
+class BudgetTracker:
+    """Track budget consumption and decide when to terminate."""
+
+    TIER_COSTS = {0: 0.0, 1: 1.0, 2: 10.0}
+    TIER_LIMITS = {0: float("inf"), 1: 100, 2: 20}
+
+    def __init__(self, tier: int = 0, max_budget: float = float("inf")):
+        self.tier = tier
+        self.max_budget = max_budget
+        self.spent = 0.0
+        self.calls = 0
+
+    def charge(self, cost: float | None = None) -> bool:
+        if cost is None:
+            cost = self.TIER_COSTS.get(self.tier, 0.0)
+        self.spent += cost
+        self.calls += 1
+        return self.spent <= self.max_budget
+
+    def should_terminate(self) -> bool:
+        return self.spent > self.max_budget
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "tier": self.tier,
+            "spent": self.spent,
+            "max_budget": self.max_budget,
+            "calls": self.calls,
+            "remaining": max(0.0, self.max_budget - self.spent),
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Global performance tracker                                                  #
+# --------------------------------------------------------------------------- #
+_tracker: PerformanceReport | None = None
+
+
+def get_tracker() -> PerformanceReport:
+    global _tracker
+    if _tracker is None:
+        _tracker = PerformanceReport()
+    return _tracker
+
+
+def reset_tracker():
+    global _tracker
+    _tracker = None
+
+
+# --------------------------------------------------------------------------- #
+# Performance tracking context manager                                        #
+# --------------------------------------------------------------------------- #
+class track_performance:
+    """Context manager for tracking adapter call performance."""
+
+    def __init__(self, service: str = "", call_id: str = ""):
+        self.service = service
+        self.call_id = call_id or hashlib.md5(f"{service}-{time.time()}".encode()).hexdigest()[:8]
+        self.start_time = time.time()
+        self.metrics = CallMetrics(service=service, call_id=self.call_id, start_time=self.start_time)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.metrics.end_time = time.time()
+        self.metrics.duration_ms = (self.metrics.end_time - self.metrics.start_time) * 1000
+        try:
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            self.metrics.memory_mb = usage.ru_maxrss / 1024
+        except Exception:
+            self.metrics.memory_mb = 0.0
+        if exc_type is not None:
+            self.metrics.success = False
+            self.metrics.error = f"{exc_type.__name__}: {exc_val}"
+        get_tracker().add_call(self.metrics)
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# Batch processing                                                            #
+# --------------------------------------------------------------------------- #
+def batch_candidates(items: list[Any], batch_size: int = 10) -> list[list[Any]]:
+    """Split items into batches."""
+    return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+
+
+def process_batch(items: list[Any], processor: Callable, batch_size: int = 10) -> list[Any]:
+    """Process items in batches."""
+    results: list[Any] = []
+    for batch in batch_candidates(items, batch_size):
+        results.extend(processor(batch))
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Global budget tracker                                                       #
+# --------------------------------------------------------------------------- #
+_global_budget_tracker: BudgetTracker | None = None
+
+
+def get_global_budget_tracker() -> BudgetTracker:
+    """Get or create the global budget tracker."""
+    global _global_budget_tracker
+    if _global_budget_tracker is None:
+        _global_budget_tracker = BudgetTracker()
+    return _global_budget_tracker
+
+
+def reset_global_budget_tracker():
+    """Reset the global budget tracker."""
+    global _global_budget_tracker
+    _global_budget_tracker = None
+
+
+# --------------------------------------------------------------------------- #
+# Standalone should_terminate function                                        #
+# --------------------------------------------------------------------------- #
+def should_terminate(budget_tracker: BudgetTracker | None = None) -> bool:
+    """Check if budget should terminate.
+    
+    Args:
+        budget_tracker: Optional BudgetTracker instance. If None, uses global tracker.
+    
+    Returns:
+        True if budget is exhausted.
+    """
+    if budget_tracker is None:
+        budget_tracker = get_global_budget_tracker()
+    return budget_tracker.should_terminate()

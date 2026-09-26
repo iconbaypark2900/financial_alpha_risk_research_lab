@@ -15,7 +15,7 @@ import math
 
 import pytest
 
-import src.research_integrity.core as ri
+from research_integrity.core import ri
 
 PERIODS_PER_YEAR = 250
 

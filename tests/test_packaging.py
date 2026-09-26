@@ -124,12 +124,12 @@ def test_every_name_the_package_exports_actually_exists():
 
     This runs in both environments and catches the gap in the minimal one.
     """
-    import src.research_integrity as ri
+    from research_integrity.core import ri
 
     missing = [name for name in ri.__all__ if not hasattr(ri, name)]
     assert not missing, f"__all__ promises {missing}, which the module does not define"
 
-    import src.portfolio as portfolio
+    import portfolio as portfolio
 
     missing = [name for name in portfolio.__all__ if not hasattr(portfolio, name)]
     assert not missing, f"__all__ promises {missing}, which the module does not define"

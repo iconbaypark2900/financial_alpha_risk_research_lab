@@ -63,7 +63,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from ..perf import AdapterCache, enforce_timeout, should_terminate
+from perf import AdapterCache, enforce_timeout, should_terminate
 
 
 def _simple_returns(values: Sequence[float]) -> Any:
@@ -171,7 +171,7 @@ class Study:
         - LRU cache: keyed on (dataset_id, start, end, strategy)
         """
         # Budget-aware early termination
-        if should_terminate():
+        if should_terminate(get_global_budget_tracker()):
             return {"error": "budget_exceeded", "run_id": None, "dataset_version": None}
 
         # Check cache

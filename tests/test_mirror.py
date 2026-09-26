@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from src.research_integrity.mirror import Mirror, MirrorError
+from research_integrity.mirror import Mirror, MirrorError
 
 AAPL = json.dumps({"cik": 320193, "units": {"USD": [
     {"end": "2009-09-26", "val": 27832000000, "form": "10-K",
@@ -177,7 +177,7 @@ def test_a_corrupt_archive_is_refused(tmp_path):
 def test_the_existing_parser_reads_mirrored_entries_unchanged(mirror):
     """The reason this archive is the right one: its entries are byte-identical
     in FORM to what the API returns, so nothing downstream changes."""
-    from src.research_integrity.ingest import concept_facts
+    from research_integrity.ingest import concept_facts
 
     facts = concept_facts(mirror.read_cik(320193), entity_id="AAPL",
                           field="book_equity")
