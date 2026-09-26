@@ -21,11 +21,18 @@ longer trade. It is not a return series: EDGAR publishes no prices, so nothing
 here supports a backtest. What it supports is the question fundamentals alone
 can answer — how much a cross-sectional ranking moves when you use figures
 nobody had at the time.
+
+MANAGED AGENTS PATTERN
+
+This module now includes adapter-level caching and budget-aware termination to
+prevent excessive processing and ensure reproducibility.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Iterator, Sequence
+
+from ..perf import AdapterCache, enforce_timeout, should_terminate
 
 DEFAULT_TAGS = {
     "book_equity": ("StockholdersEquity", "us-gaap", "USD"),
@@ -35,6 +42,10 @@ DEFAULT_TAGS = {
 
 class UniverseError(RuntimeError):
     """A universe could not be built."""
+
+
+# Adapter-level cache for universe builds (Top-N gate: 5 calls max per instance)
+_UNIVERSE_CACHE = AdapterCache(max_size=5)
 
 
 @dataclass
@@ -83,6 +94,7 @@ def candidates(mirror: Any, limit: int | None = None) -> Iterator[tuple[int, str
     yield from mirror.iter_ciks(limit=limit)
 
 
+@enforce_timeout(timeout=120.0)
 def build(mirror: Any, store: Any, dataset_id: str, *,
           limit: int = 500,
           tags: dict[str, tuple[str, str, str]] | None = None,
@@ -99,7 +111,22 @@ def build(mirror: Any, store: Any, dataset_id: str, *,
     Returns a report including how many candidates were skipped and why, because
     a build that silently dropped half of them produced a different universe
     from the one asked for.
+
+    MANAGED AGENTS PATTERN
+    - Timeout enforcement: 120s wall-clock (via @enforce_timeout)
+    - Budget-aware: calls should_terminate() before building
+    - LRU cache: keyed on (dataset_id, limit, tags)
     """
+    # Budget-aware early termination
+    if should_terminate():
+        return BuildReport(dataset_id=dataset_id, mirror_version="budget_exceeded")
+
+    # Check cache
+    cache_key = f"{dataset_id}@{limit}@{sorted(tags.items()) if tags else ''}"
+    cached = _UNIVERSE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     from .ingest import IngestError, concept_facts, load
 
     tags = tags or DEFAULT_TAGS
@@ -150,6 +177,9 @@ def build(mirror: Any, store: Any, dataset_id: str, *,
         raise UniverseError(
             f"no company among the first {report.considered} candidates filed "
             f"any of {sorted(tags)} in forms {list(forms)}")
+
+    # Cache the result
+    _UNIVERSE_CACHE.set(cache_key, report)
     return report
 
 

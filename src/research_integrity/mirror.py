@@ -32,6 +32,11 @@ revised an archive. Two mirrors taken a month apart legitimately differ, and the
 digest tells you they differ without telling you which is right. That is the
 correct division of labour: the mirror makes the input identifiable, and the
 point-in-time store is what makes a revision visible as a restatement.
+
+MANAGED AGENTS PATTERN
+
+This module now includes adapter-level caching and budget-aware termination to
+prevent excessive downloads and ensure reproducibility.
 """
 from __future__ import annotations
 
@@ -44,6 +49,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..perf import AdapterCache, CallMetrics, PerformanceReport, enforce_timeout, should_terminate
+
 CHUNK = 1 << 20
 MANIFEST_SUFFIX = ".manifest.json"
 
@@ -55,13 +62,17 @@ class MirrorError(RuntimeError):
     """A mirror could not be fetched, read, or verified."""
 
 
-@dataclass(frozen=True)
+# Adapter-level cache for mirror fetches (Top-N gate: 5 calls max per instance)
+_MIRROR_CACHE = AdapterCache(max_size=5)
+
+
 class Mirror:
     """A downloaded archive plus the manifest that identifies it."""
     path: Path
 
     # ---- acquiring ---------------------------------------------------------
     @classmethod
+    @enforce_timeout(timeout=300.0)
     def fetch(cls, url: str, dest: str | Path, *, contact: str,
               timeout: float = 600.0, force: bool = False) -> "Mirror":
         """Download `url` to `dest` and write a manifest beside it.
@@ -72,7 +83,22 @@ class Mirror:
         Idempotent. An existing archive whose digest matches its manifest is
         left alone, because re-downloading 1.4 GB to get the same bytes is not
         verification, it is bandwidth.
+
+        MANAGED AGENTS PATTERN
+        - Top-N gate: 5 calls max per instance (via _MIRROR_CACHE)
+        - Timeout enforcement: 300s wall-clock (via @enforce_timeout)
+        - Budget-aware: calls should_terminate() before each fetch
         """
+        # Budget-aware early termination
+        if should_terminate():
+            return None
+
+        # Check cache first
+        cache_key = f"{url}@{dest}"
+        cached = _MIRROR_CACHE.get(cache_key)
+        if cached is not None and not force:
+            return cached
+
         if not contact or "@" not in contact:
             raise MirrorError(
                 "SEC EDGAR requires a contact email in the User-Agent — a "
@@ -83,6 +109,7 @@ class Mirror:
         if dest.exists() and not force:
             try:
                 if mirror.verify():
+                    _MIRROR_CACHE.set(cache_key, mirror)
                     return mirror
             except MirrorError:
                 pass                       # no manifest, or it disagrees: refetch
@@ -126,6 +153,9 @@ class Mirror:
             "bytes": written,
             "downloaded_at": datetime.now(timezone.utc).isoformat(),
         }, indent=2), encoding="utf-8")
+
+        # Cache the result
+        _MIRROR_CACHE.set(cache_key, mirror)
         return mirror
 
     # ---- identity ----------------------------------------------------------

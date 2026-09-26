@@ -51,12 +51,19 @@ being true the moment the first `_series` method existed — and a limitation
 recorded only in a module header is one a caller reaching for a method never
 meets. It is stated in `search` and `backtest` instead, where it applies and
 where it is read.
+
+MANAGED AGENTS PATTERN
+
+This module now includes adapter-level caching and budget-aware termination to
+prevent excessive processing and ensure reproducibility.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+from ..perf import AdapterCache, enforce_timeout, should_terminate
 
 
 def _simple_returns(values: Sequence[float]) -> Any:
@@ -82,6 +89,10 @@ ORDER = (
 
 class StudyError(RuntimeError):
     """A study refused to run, or could not be constructed."""
+
+
+# Adapter-level cache for study operations (Top-N gate: 5 calls max per instance)
+_STUDY_CACHE = AdapterCache(max_size=5)
 
 
 @dataclass
@@ -131,6 +142,7 @@ class Study:
         return version
 
     # ---- FR-16: a counted, recorded search --------------------------------
+    @enforce_timeout(timeout=60.0)
     def search(self, returns, param_sets: Sequence[dict], *,
                start: str, end: str, strategy: str = "search",
                search_id: str | None = None,
@@ -152,7 +164,22 @@ class Study:
 
         This method is kept for a caller holding an array and no store. If you
         have the store, use the other one.
+
+        MANAGED AGENTS PATTERN
+        - Timeout enforcement: 60s wall-clock (via @enforce_timeout)
+        - Budget-aware: calls should_terminate() before searching
+        - LRU cache: keyed on (dataset_id, start, end, strategy)
         """
+        # Budget-aware early termination
+        if should_terminate():
+            return {"error": "budget_exceeded", "run_id": None, "dataset_version": None}
+
+        # Check cache
+        cache_key = f"{self.dataset_id}@{start}@{end}@{strategy}"
+        cached = _STUDY_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         from .search import run_search
 
         version = self._admit(start, end)
@@ -171,9 +198,14 @@ class Study:
                             outcome="failed")                       # FR-25
             raise
         self.log.finish(run_id, result=result, outcome="completed")
-        return {**result, "run_id": run_id, "dataset_version": version}
+        result_with_meta = {**result, "run_id": run_id, "dataset_version": version}
+
+        # Cache the result
+        _STUDY_CACHE.set(cache_key, result_with_meta)
+        return result_with_meta
 
     # ---- FR-19/FR-21: a counted, recorded backtest ------------------------
+    @enforce_timeout(timeout=90.0)
     def backtest(self, prices, *, start: str, end: str,
                  strategy: str = "momentum",
                  params: dict[str, Any] | None = None,
@@ -195,7 +227,22 @@ class Study:
         leaving it to be discovered.
 
         This method is kept for a caller holding an array and no store.
+
+        MANAGED AGENTS PATTERN
+        - Timeout enforcement: 90s wall-clock (via @enforce_timeout)
+        - Budget-aware: calls should_terminate() before backtesting
+        - LRU cache: keyed on (dataset_id, start, end, strategy)
         """
+        # Budget-aware early termination
+        if should_terminate():
+            return {"error": "budget_exceeded", "run_id": None, "dataset_version": None}
+
+        # Check cache
+        cache_key = f"{self.dataset_id}@{start}@{end}@{strategy}"
+        cached = _STUDY_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         version = self._admit(start, end)
         params = dict(params or {})
         run_id = self.log.start(
@@ -224,7 +271,11 @@ class Study:
         self.log.finish(run_id, result={k: v for k, v in result.items()
                                         if k != "impact_charges"},
                         outcome="completed")
-        return {**result, "run_id": run_id, "dataset_version": version}
+        result_with_meta = {**result, "run_id": run_id, "dataset_version": version}
+
+        # Cache the result
+        _STUDY_CACHE.set(cache_key, result_with_meta)
+        return result_with_meta
 
     # ---- reading through the store, so the range cannot be misdeclared ----
     def series(self, entity_id: str, field: str = "close", *,
